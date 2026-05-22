@@ -1,2 +1,23 @@
 # cache and other artifacts produced by Lean's Lake build tool
 .lake/
+build/
+*.olean
+*.ilean
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.python-version
+
+# macOS
+.DS_Store
+
+# Editor
+.vscode/
+.idea/
+
+# Local
+*.local
+/tmp/

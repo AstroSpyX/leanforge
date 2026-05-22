@@ -1,0 +1,619 @@
+{
+  "project": "/Users/pavel/lean-projects/leanforge/examples/scratch",
+  "file": "Scratch/Basic.lean",
+  "elaborationSucceeded": false,
+  "timedOut": false,
+  "counts": {
+    "information": 2,
+    "warning": 1,
+    "error": 1
+  },
+  "diagnostics": [
+    {
+      "severity": "information",
+      "range": {
+        "end": {
+          "character": 6,
+          "line": 2
+        },
+        "start": {
+          "character": 0,
+          "line": 2
+        }
+      },
+      "fullRange": {
+        "end": {
+          "character": 6,
+          "line": 2
+        },
+        "start": {
+          "character": 0,
+          "line": 2
+        }
+      },
+      "messageText": "hello : String",
+      "messageInteractive": {
+        "tag": [
+          {
+            "expr": {
+              "append": [
+                {
+                  "text": "hello : "
+                },
+                {
+                  "tag": [
+                    {
+                      "info": {
+                        "p": "0"
+                      },
+                      "subexprPos": "/1"
+                    },
+                    {
+                      "text": "String"
+                    }
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "text": ""
+          }
+        ]
+      },
+      "source": "Lean 4",
+      "tags": null,
+      "goal": null,
+      "termGoal": null,
+      "enclosingDeclaration": null,
+      "sourceSnippet": {
+        "startLine": 0,
+        "lines": [
+          "def hello : String := \"world\"",
+          "",
+          "#check hello",
+          "#eval hello",
+          "",
+          "def unused (x : Nat) : Nat := 0"
+        ],
+        "errorLineOffset": 2
+      }
+    },
+    {
+      "severity": "information",
+      "range": {
+        "end": {
+          "character": 5,
+          "line": 3
+        },
+        "start": {
+          "character": 0,
+          "line": 3
+        }
+      },
+      "fullRange": {
+        "end": {
+          "character": 5,
+          "line": 3
+        },
+        "start": {
+          "character": 0,
+          "line": 3
+        }
+      },
+      "messageText": "\"world\"",
+      "messageInteractive": {
+        "tag": [
+          {
+            "expr": {
+              "text": "\"world\""
+            }
+          },
+          {
+            "text": ""
+          }
+        ]
+      },
+      "source": "Lean 4",
+      "tags": null,
+      "goal": null,
+      "termGoal": null,
+      "enclosingDeclaration": null,
+      "sourceSnippet": {
+        "startLine": 0,
+        "lines": [
+          "def hello : String := \"world\"",
+          "",
+          "#check hello",
+          "#eval hello",
+          "",
+          "def unused (x : Nat) : Nat := 0",
+          ""
+        ],
+        "errorLineOffset": 3
+      }
+    },
+    {
+      "severity": "warning",
+      "range": {
+        "end": {
+          "character": 13,
+          "line": 5
+        },
+        "start": {
+          "character": 12,
+          "line": 5
+        }
+      },
+      "fullRange": {
+        "end": {
+          "character": 13,
+          "line": 5
+        },
+        "start": {
+          "character": 12,
+          "line": 5
+        }
+      },
+      "messageText": "unused variable `x`\n\nNote: This linter can be disabled with `set_option linter.unusedVariables false`",
+      "messageInteractive": {
+        "append": [
+          {
+            "tag": [
+              {
+                "expr": {
+                  "text": "unused variable `"
+                }
+              },
+              {
+                "text": ""
+              }
+            ]
+          },
+          {
+            "tag": [
+              {
+                "expr": {
+                  "text": "x"
+                }
+              },
+              {
+                "text": ""
+              }
+            ]
+          },
+          {
+            "tag": [
+              {
+                "expr": {
+                  "text": "`"
+                }
+              },
+              {
+                "text": ""
+              }
+            ]
+          },
+          {
+            "tag": [
+              {
+                "expr": {
+                  "text": "\n"
+                }
+              },
+              {
+                "text": ""
+              }
+            ]
+          },
+          {
+            "tag": [
+              {
+                "expr": {
+                  "text": "\n"
+                }
+              },
+              {
+                "text": ""
+              }
+            ]
+          },
+          {
+            "tag": [
+              {
+                "expr": {
+                  "text": "Note: "
+                }
+              },
+              {
+                "text": ""
+              }
+            ]
+          },
+          {
+            "tag": [
+              {
+                "expr": {
+                  "text": "This linter can be disabled with `set_option "
+                }
+              },
+              {
+                "text": ""
+              }
+            ]
+          },
+          {
+            "tag": [
+              {
+                "expr": {
+                  "text": "linter.unusedVariables"
+                }
+              },
+              {
+                "text": ""
+              }
+            ]
+          },
+          {
+            "tag": [
+              {
+                "expr": {
+                  "text": " false`"
+                }
+              },
+              {
+                "text": ""
+              }
+            ]
+          }
+        ]
+      },
+      "source": "Lean 4",
+      "tags": [
+        1
+      ],
+      "goal": null,
+      "termGoal": {
+        "goal": "\u22a2 Nat",
+        "range": {
+          "end": {
+            "character": 13,
+            "line": 5
+          },
+          "start": {
+            "character": 12,
+            "line": 5
+          }
+        }
+      },
+      "enclosingDeclaration": {
+        "name": "unused",
+        "kind": "method",
+        "range": {
+          "end": {
+            "character": 31,
+            "line": 5
+          },
+          "start": {
+            "character": 0,
+            "line": 5
+          }
+        }
+      },
+      "sourceSnippet": {
+        "startLine": 2,
+        "lines": [
+          "#check hello",
+          "#eval hello",
+          "",
+          "def unused (x : Nat) : Nat := 0",
+          "",
+          "def bad : Nat := \"not a number\""
+        ],
+        "errorLineOffset": 3
+      }
+    },
+    {
+      "severity": "error",
+      "range": {
+        "end": {
+          "character": 31,
+          "line": 7
+        },
+        "start": {
+          "character": 17,
+          "line": 7
+        }
+      },
+      "fullRange": {
+        "end": {
+          "character": 31,
+          "line": 7
+        },
+        "start": {
+          "character": 17,
+          "line": 7
+        }
+      },
+      "messageText": "Type mismatch\n  \"not a number\"\nhas type\n  String\nbut is expected to have type\n  Nat",
+      "messageInteractive": {
+        "append": [
+          {
+            "tag": [
+              {
+                "expr": {
+                  "text": "Type mismatch"
+                }
+              },
+              {
+                "text": ""
+              }
+            ]
+          },
+          {
+            "tag": [
+              {
+                "expr": {
+                  "text": "\n  "
+                }
+              },
+              {
+                "text": ""
+              }
+            ]
+          },
+          {
+            "tag": [
+              {
+                "expr": {
+                  "tag": [
+                    {
+                      "info": {
+                        "p": "1"
+                      },
+                      "subexprPos": "/"
+                    },
+                    {
+                      "text": "\"not a number\""
+                    }
+                  ]
+                }
+              },
+              {
+                "text": ""
+              }
+            ]
+          },
+          {
+            "tag": [
+              {
+                "expr": {
+                  "text": ""
+                }
+              },
+              {
+                "text": ""
+              }
+            ]
+          },
+          {
+            "tag": [
+              {
+                "expr": {
+                  "text": "\n"
+                }
+              },
+              {
+                "text": ""
+              }
+            ]
+          },
+          {
+            "tag": [
+              {
+                "expr": {
+                  "text": ""
+                }
+              },
+              {
+                "text": ""
+              }
+            ]
+          },
+          {
+            "tag": [
+              {
+                "expr": {
+                  "text": "has type"
+                }
+              },
+              {
+                "text": ""
+              }
+            ]
+          },
+          {
+            "tag": [
+              {
+                "expr": {
+                  "text": "\n  "
+                }
+              },
+              {
+                "text": ""
+              }
+            ]
+          },
+          {
+            "tag": [
+              {
+                "expr": {
+                  "tag": [
+                    {
+                      "info": {
+                        "p": "2"
+                      },
+                      "subexprPos": "/"
+                    },
+                    {
+                      "text": "String"
+                    }
+                  ]
+                }
+              },
+              {
+                "text": ""
+              }
+            ]
+          },
+          {
+            "tag": [
+              {
+                "expr": {
+                  "text": ""
+                }
+              },
+              {
+                "text": ""
+              }
+            ]
+          },
+          {
+            "tag": [
+              {
+                "expr": {
+                  "text": "\n"
+                }
+              },
+              {
+                "text": ""
+              }
+            ]
+          },
+          {
+            "tag": [
+              {
+                "expr": {
+                  "text": "but is expected to have type"
+                }
+              },
+              {
+                "text": ""
+              }
+            ]
+          },
+          {
+            "tag": [
+              {
+                "expr": {
+                  "text": "\n  "
+                }
+              },
+              {
+                "text": ""
+              }
+            ]
+          },
+          {
+            "tag": [
+              {
+                "expr": {
+                  "tag": [
+                    {
+                      "info": {
+                        "p": "3"
+                      },
+                      "subexprPos": "/"
+                    },
+                    {
+                      "text": "Nat"
+                    }
+                  ]
+                }
+              },
+              {
+                "text": ""
+              }
+            ]
+          },
+          {
+            "tag": [
+              {
+                "expr": {
+                  "text": ""
+                }
+              },
+              {
+                "text": ""
+              }
+            ]
+          },
+          {
+            "tag": [
+              {
+                "expr": {
+                  "text": ""
+                }
+              },
+              {
+                "text": ""
+              }
+            ]
+          },
+          {
+            "tag": [
+              {
+                "expr": {
+                  "text": ""
+                }
+              },
+              {
+                "text": ""
+              }
+            ]
+          }
+        ]
+      },
+      "source": "Lean 4",
+      "tags": null,
+      "goal": null,
+      "termGoal": {
+        "goal": "\u22a2 Nat",
+        "range": {
+          "end": {
+            "character": 31,
+            "line": 7
+          },
+          "start": {
+            "character": 17,
+            "line": 7
+          }
+        }
+      },
+      "enclosingDeclaration": {
+        "name": "bad",
+        "kind": "method",
+        "range": {
+          "end": {
+            "character": 31,
+            "line": 7
+          },
+          "start": {
+            "character": 0,
+            "line": 7
+          }
+        }
+      },
+      "sourceSnippet": {
+        "startLine": 4,
+        "lines": [
+          "",
+          "def unused (x : Nat) : Nat := 0",
+          "",
+          "def bad : Nat := \"not a number\""
+        ],
+        "errorLineOffset": 3
+      }
+    }
+  ]
+}
