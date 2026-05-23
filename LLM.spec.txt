@@ -1,0 +1,332 @@
+ASK_LLM COMPONENT — PLAN (revision 5)
+======================================
+
+Generic remote-LLM interface. Anthropic is the current implementation;
+the provider abstraction is designed so OpenAI (and any future
+provider) can be added without disturbing callers.
+
+History note: revisions 1-3 targeted local LLMs via Ollama. That path
+was evaluated and dropped. The complete install recipe, eval
+methodology, results, decision rationale, and gotchas are preserved
+in llm/LOCAL_MODELS.txt. Raw spike notes are in llm/SPIKES.md. This
+spec does not repeat any of that material.
+
+
+GOAL
+----
+Build ask_llm: a single Python module that lives inside the leanforge
+repo, accepts a prompt, returns a structured response, and hides
+which provider/model is doing the work. Also exposes a fix-mode
+entry point that consumes leanforge diagnostic records directly.
+No UI. No integration with the leanforge pipeline yet. Just the
+function and the providers behind it.
+
+
+WHY REMOTE
+----------
+Local 7-14B models cannot reliably produce correct Lean 4 code (see
+LOCAL_MODELS.txt for the full eval). A remote frontier model is the
+right tool for this use case because it can:
+
+  - Follow "output only a code block" instructions reliably
+  - Self-correct across turns given a structured error (the core
+    skill the leanforge fix loop needs)
+  - Hold 200K tokens of context (source + diagnostics + imports)
+  - Not require GGUF / quant / chat-template management
+
+Trade-offs accepted:
+  - Per-call cost (varies by provider; budget-tracked at call sites)
+  - Network round-trip latency (~1-3 s typical)
+  - Requires API key and connectivity
+  - Vendor coupling (mitigated by the provider abstraction below)
+
+
+DIRECTORY LAYOUT
+----------------
+
+  leanforge/
+    leanforge.py            (existing — Lean compiler integration)
+    smoke_test.py           (existing)
+    llm/
+      __init__.py           auto-loads .env via python-dotenv
+      ask_llm.py            core function + Response + errors + retry + fix mode
+      models.py             registry of remote model IDs
+      cache.py              disk cache, keyed on final payload
+      smoke_anthropic.py    end-to-end smoke test
+      LOCAL_MODELS.txt      archived post-mortem: install/eval/decision for Ollama
+      SPIKES.md             raw spike notes (kept as findings record)
+      evals/
+        curls.txt           one-off Ollama eval curls (kept for reference)
+
+
+PROVIDER ABSTRACTION
+--------------------
+Each model in the registry declares a `provider`. ask_llm dispatches
+on this field to the right transport implementation.
+
+  @dataclass(frozen=True)
+  class ModelConfig:
+      provider            : str          # "anthropic" | (future) "openai"
+      provider_model_id   : str          # exact ID as the provider expects it
+      default_temperature : float | None # None = do NOT send temperature param
+      context_window      : int          # informational, for sizing checks
+
+Current registry (anthropic-only):
+
+  MODELS: dict[str, ModelConfig] = {
+      "opus":   ModelConfig("anthropic", "claude-opus-4-7",
+                            None, 200_000),                   # temp deprecated
+      "sonnet": ModelConfig("anthropic", "claude-sonnet-4-6",
+                            0.0,  200_000),
+      "haiku":  ModelConfig("anthropic", "claude-haiku-4-5-20251001",
+                            0.0,  200_000),
+  }
+  DEFAULT_MODEL = "sonnet"
+
+When OpenAI support lands later, entries like:
+
+      "gpt5":   ModelConfig("openai", "gpt-5",       0.0, 400_000),
+      "gpt5m":  ModelConfig("openai", "gpt-5-mini",  0.0, 400_000),
+
+would join the same dict. Callers continue using the short keys
+("sonnet", "gpt5"); they don't see provider details.
+
+Notes on the current entries:
+  - "sonnet" is the default — best cost/quality for iterative use.
+  - "opus" when maximum reasoning is needed on a hard failure.
+  - "haiku" for cheap routing / classification.
+  - Opus 4.7 deprecated the temperature parameter, hence None.
+    ask_llm omits the param entirely when default_temperature is
+    None. Same pattern handles any future provider that drops a
+    parameter.
+
+
+THE PUBLIC API
+--------------
+
+Core function. Always returns a Response object — never a bare
+string, never None, never "".
+
+  @dataclass
+  class Response:
+      text                  : str
+      model                 : str       # registry key, e.g. "sonnet"
+      provider              : str       # "anthropic" | (future) "openai"
+      provider_model_id     : str       # actual provider model ID used
+      mode                  : str
+      latency_ms            : int
+      input_tokens          : int
+      output_tokens         : int
+      cache_creation_tokens : int       # provider-side prompt cache write
+      cache_read_tokens     : int       # provider-side prompt cache read
+      stop_reason           : str
+      cached                : bool      # served from our LOCAL disk cache
+
+  def ask_llm(
+      prompt        : str,
+      model         : str          = "sonnet",
+      mode          : str          = "raw",
+      temperature   : float | None = None,
+      max_tokens    : int          = 2048,
+      timeout_s     : float        = 120.0,
+      use_cache     : bool         = True,
+      cache_prompt  : bool         = True,
+  ) -> Response:
+      ...
+
+  # Ergonomic shortcut when caller only wants the text.
+  def ask_llm_text(prompt: str, **kw) -> str:
+      return ask_llm(prompt, **kw).text
+
+Mode values:
+  raw     prompt passes through as a single user message
+  tactic  wraps the prompt as "suggest a Lean 4 tactic for this goal"
+
+Fix-mode is a separate entry point with its own typed input. Do not
+overload mode="fix" on the core function — the input shape is a
+dict, not a string.
+
+  def ask_llm_fix(
+      diagnostic : dict,            # one record from leanforge JSON
+      model      : str = "sonnet",
+      **kw,                         # forwarded to ask_llm
+  ) -> Response:
+      ...
+
+  Internally: assembles context (the diagnostic's messageText, goal,
+  termGoal, enclosingDeclaration, sourceSnippet), formats it as a
+  single user message, calls ask_llm(...).
+
+cache_prompt parameter:
+  When true, the static prelude is sent with the provider's prompt-
+  cache directive (Anthropic: cache_control:ephemeral; OpenAI: TBD
+  per their cache API). Subsequent calls in the cache window pay a
+  fraction of the input rate for cached tokens. Essential for the
+  fix loop, where file content barely changes between turns.
+
+Note: there are TWO independent caching layers:
+  - cache.py    (this codebase)   = skip the API call entirely on
+                                    identical payloads
+  - cache_prompt (provider-side)  = skip paying full input price on
+                                    large unchanged prefixes
+
+
+CURRENT TRANSPORT: ANTHROPIC
+----------------------------
+The only provider implemented today. Uses the official `anthropic`
+Python SDK:
+
+  pip install anthropic python-dotenv
+
+Module-level singleton client:
+  anthropic.Anthropic()    re-used across calls; thread-safe
+
+API key: read from ANTHROPIC_API_KEY. The llm/__init__.py auto-loads
+a project-root .env file on import (override=False, so shell-set
+values still win). Workflow:
+
+  cp .env.example .env
+  # edit .env, set ANTHROPIC_API_KEY=sk-ant-...
+  uv run --with anthropic --with python-dotenv --python 3.12 \
+      -m llm.smoke_anthropic
+
+.env is in .gitignore; .env.example is committed. Do not commit
+.env. Keys leaked in chat transcripts or any committed file must be
+rotated at https://console.anthropic.com/settings/keys.
+
+Prompt caching (Anthropic-specific):
+  System prompt is wrapped as:
+    [{"type": "text", "text": "...",
+      "cache_control": {"type": "ephemeral"}}]
+  First call in a 5-min window pays a small cache-write premium;
+  subsequent calls pay ~10% of the input rate for cached tokens.
+  Anthropic enforces a minimum cacheable block size (1024 tokens
+  for Sonnet/Opus, 2048 for Haiku); shorter blocks are silently
+  uncached but the directive is harmless.
+
+Logging:
+  Every call writes one line to stderr before sending:
+    [ask_llm] model=sonnet mode=fix max_tokens=2048 timeout=120s cache=on ...
+  Prevents dead air during long generations.
+
+
+FUTURE TRANSPORT: OPENAI (NOT YET IMPLEMENTED)
+-----------------------------------------------
+Planned as a parallel transport branch in ask_llm. Adding it should
+require only:
+
+  1. New registry entries with provider="openai"
+  2. A small _call_openai(...) function alongside _call_anthropic(...)
+  3. Dispatch on cfg.provider inside the core call site
+  4. Map OpenAI-specific exceptions into the existing typed hierarchy
+     (RateLimitError, OverloadedError, AuthError, etc.)
+  5. Provider-specific prompt-cache directive (OpenAI uses a
+     different mechanism — TBD when implemented)
+
+No changes to the public API, the Response dataclass, the cache
+layer, or the error contract should be necessary. Callers who use
+short keys ("sonnet", "gpt5") will not need to know which provider
+is behind them.
+
+OPENAI_API_KEY would be read the same way as ANTHROPIC_API_KEY (from
+.env or shell), and the .env.example template would gain the
+placeholder.
+
+This is documented now so the registry/Response field names commit
+to provider-agnostic naming from the start, even though only
+anthropic is wired up.
+
+
+ERROR CONTRACT
+--------------
+ask_llm raises typed exceptions on failure. It never returns "" and
+never returns None. The exception hierarchy is provider-agnostic;
+each transport branch maps its own SDK errors into these classes.
+
+  class AskLLMError(Exception):           pass
+  class AuthError(AskLLMError):           pass     # missing/invalid key, 401/403
+  class RateLimitError(AskLLMError):      pass     # 429
+  class OverloadedError(AskLLMError):     pass     # provider overloaded (529, etc.)
+  class ModelNotFound(AskLLMError):       pass     # 404
+  class APITimeout(AskLLMError):          pass     # exceeded timeout_s
+  class APIServerError(AskLLMError):      pass     # 5xx other
+  class APIBadRequest(AskLLMError):       pass     # 400 (malformed input)
+
+Retry policy:
+  - RateLimitError, OverloadedError: exponential backoff, up to 3
+    retries. Respect Retry-After header if the SDK surfaces it.
+  - APITimeout, APIServerError: single retry, then raise.
+  - AuthError, ModelNotFound, APIBadRequest: no retry, raise immediately.
+
+Exceptions are never cached — only successful Responses are stored.
+
+Default timeout is 120 s. Override per call for very long generations.
+
+
+CACHING (cache.py — local disk)
+-------------------------------
+Independent of provider-side prompt caches. Skips the API call
+entirely on identical inputs — useful during dev iteration and
+benchmark reruns.
+
+Store: one JSON file per entry at llm/.cache/<sha>.json
+Key: sha256 of the JSON-serialized cache key object:
+
+    {
+      "provider_model_id": "claude-sonnet-4-6",
+      "system":            "...the system prompt...",
+      "messages":          [...final messages array sent to the API...],
+      "temperature":       0.0,
+      "max_tokens":        2048
+    }
+
+  - Key reflects the complete payload sent to the provider.
+    Different model/system/messages/params = different cache key.
+  - Exception paths store nothing.
+  - On cache hit: return Response(..., cached=True). The stored
+    latency_ms is preserved (so it reflects "what we would have
+    paid"), not the lookup time.
+
+Maintenance:
+  - cache.clear(model=None)   wipe everything, or just one model
+  - cache.size()              bytes on disk
+  - cache.prune(max_bytes=N)  delete oldest until under N
+  - No automatic TTL in v1. Manual clear/prune when it grows.
+
+
+DETERMINISM
+-----------
+Default temperature comes from ModelConfig.default_temperature.
+Most current entries default to 0.0 (greedy), which makes the
+SAME prompt produce the SAME output, which the local disk cache
+then serves for free on reruns.
+
+Opus 4.7 has temperature deprecated entirely (default_temperature
+is None — the parameter is not sent). Future provider models may
+have similar quirks; the pattern handles them.
+
+Override per call via the temperature argument when exploring or
+benchmarking variance.
+
+
+BUILD STATUS
+------------
+  models.py            DONE
+  cache.py             DONE
+  ask_llm.py           DONE (anthropic-only transport)
+  smoke_anthropic.py   DONE — verified haiku/sonnet/opus respond,
+                       cache hits work
+  .env / .env.example  DONE — auto-loaded by llm/__init__.py
+  OpenAI transport     NOT STARTED — see future-transport section
+  pipeline integration NOT STARTED — leanforge.py + ask_llm_fix
+                       are not yet wired together
+  benchmark            NOT STARTED — measure fix success rate /
+                       token cost across a real-Lean-failures
+                       set, both providers when available
+
+
+WHAT THIS IS NOT
+----------------
+No UI. No automatic patch application. No streaming UI. No
+integration with leanforge yet. Just ask_llm, ask_llm_fix, and the
+infrastructure behind them.

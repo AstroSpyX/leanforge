@@ -1,0 +1,134 @@
+EVAL CURLS — one per model, same prompt, copy/paste/run
+=========================================================
+
+PROMPT (used in every curl below)
+  "Prove the following Lean 4 theorem:
+
+  ```lean4
+  import Mathlib
+
+  theorem sqrt_two_irrational : Irrational (Real.sqrt 2) := by
+    sorry
+  ```
+
+  Replace the sorry with a valid proof."
+
+To change the prompt: edit the "content" field in the messages array
+of each curl. All five curls use identical messages.
+
+Sampling parameters: temperature=0.6, top_p=0.95, num_predict=1500.
+Picked to match Kimina's trained defaults; the other models will also
+accept these. Lower num_predict for faster runs, raise for more room.
+
+
+1. qwen2-math:7b
+-----------------
+curl http://localhost:11434/api/chat -d '{
+  "model": "qwen2-math:7b",
+  "stream": false,
+  "options": {"temperature": 0.6, "top_p": 0.95, "num_predict": 1500},
+  "messages": [
+    {"role": "system", "content": "You are an expert in mathematics and Lean 4."},
+    {"role": "user", "content": "Prove the following Lean 4 theorem:\n\n```lean4\nimport Mathlib\n\ntheorem sqrt_two_irrational : Irrational (Real.sqrt 2) := by\n  sorry\n```\n\nReplace the sorry with a valid proof."}
+  ]
+}'
+
+
+2. llama3.1:8b
+---------------
+curl http://localhost:11434/api/chat -d '{
+  "model": "llama3.1:8b",
+  "stream": false,
+  "options": {"temperature": 0.6, "top_p": 0.95, "num_predict": 1500},
+  "messages": [
+    {"role": "system", "content": "You are an expert in mathematics and Lean 4."},
+    {"role": "user", "content": "Prove the following Lean 4 theorem:\n\n```lean4\nimport Mathlib\n\ntheorem sqrt_two_irrational : Irrational (Real.sqrt 2) := by\n  sorry\n```\n\nReplace the sorry with a valid proof."}
+  ]
+}'
+
+
+3. phi4:14b
+------------
+curl http://localhost:11434/api/chat -d '{
+  "model": "phi4:14b",
+  "stream": false,
+  "options": {"temperature": 0.6, "top_p": 0.95, "num_predict": 1500},
+  "messages": [
+    {"role": "system", "content": "You are an expert in mathematics and Lean 4."},
+    {"role": "user", "content": "Prove the following Lean 4 theorem:\n\n```lean4\nimport Mathlib\n\ntheorem sqrt_two_irrational : Irrational (Real.sqrt 2) := by\n  sorry\n```\n\nReplace the sorry with a valid proof."}
+  ]
+}'
+
+
+4. kimina-prover:q6_k
+----------------------
+curl http://localhost:11434/api/chat -d '{
+  "model": "kimina-prover:q6_k",
+  "stream": false,
+  "options": {"temperature": 0.6, "top_p": 0.95, "num_predict": 1500},
+  "messages": [
+    {"role": "system", "content": "You are an expert in mathematics and Lean 4."},
+    {"role": "user", "content": "Prove the following Lean 4 theorem:\n\n```lean4\nimport Mathlib\n\ntheorem sqrt_two_irrational : Irrational (Real.sqrt 2) := by\n  sorry\n```\n\nReplace the sorry with a valid proof."}
+  ]
+}'
+
+
+5. deepseek-prover:q5_k_m   (NAIVE baseline — same format as the others)
+-------------------------------------------------------------------------
+WARNING: this call returns an empty response (eval_count=1, EOS only).
+DeepSeek-Prover-V2 was trained with NO system message and a specific
+user-message wrapper. Use curl 5b below for actual output.
+
+curl http://localhost:11434/api/chat -d '{
+  "model": "deepseek-prover:q5_k_m",
+  "stream": false,
+  "options": {"temperature": 0.6, "top_p": 0.95, "num_predict": 1500},
+  "messages": [
+    {"role": "system", "content": "You are an expert in mathematics and Lean 4."},
+    {"role": "user", "content": "Prove the following Lean 4 theorem:\n\n```lean4\nimport Mathlib\n\ntheorem sqrt_two_irrational : Irrational (Real.sqrt 2) := by\n  sorry\n```\n\nReplace the sorry with a valid proof."}
+  ]
+}'
+
+
+5b. deepseek-prover:q5_k_m   (PROPER format — model's trained wrapper)
+-----------------------------------------------------------------------
+No system message. User message uses the exact "Complete the
+following Lean 4 code... proof plan" wrapper DeepSeek-Prover-V2
+was fine-tuned on (per the HF model card).
+
+IMPORTANT: must use sampling (temperature > 0). Greedy decoding
+(temperature=0) sends this model into a degenerate repetition loop
+that emits 1500 tokens of the same paragraph and never produces
+Lean code. Confirmed during eval. The HF card omits sampling
+params; defaulting to Kimina-style temperature=0.6, top_p=0.95.
+
+curl http://localhost:11434/api/chat -d '{
+  "model": "deepseek-prover:q5_k_m",
+  "stream": false,
+  "options": {"temperature": 0.6, "top_p": 0.95, "num_predict": 1500},
+  "messages": [
+    {"role": "user", "content": "Complete the following Lean 4 code:\n\n```lean4\nimport Mathlib\n\ntheorem sqrt_two_irrational : Irrational (Real.sqrt 2) := by\n  sorry\n```\n\nBefore producing the Lean 4 code to formally prove the given theorem, provide a detailed proof plan outlining the main proof steps and strategies.\nThe plan should highlight key ideas, intermediate lemmas, and proof structures that will guide the construction of the final formal proof."}
+  ]
+}'
+
+
+Optional: pipe any response to get just the content + timing stats
+-------------------------------------------------------------------
+Append this to any curl above:
+
+  | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d["message"]["content"]); print(); print("eval_count:", d.get("eval_count"), " tok/s:", round(d.get("eval_count",0)/(d.get("eval_duration",1)/1e9),1))'
+
+
+Notes
+-----
+- Same prompt is sent to all five models. Prover models (kimina,
+  deepseek) are NOT given their trained prompt format here. This is
+  intentional — it's the naive baseline. Compare against per-model
+  formatted versions later.
+- qwen2-math has num_ctx=4096; the prompt here is short enough to fit.
+  Longer prompts may need a smaller model or num_ctx override.
+- deepseek-prover loads at ~22GB resident. If kimina is still loaded,
+  one of them will be evicted before deepseek starts answering. Run
+  `ollama ps` between calls if you want to confirm.
+- First call to a model that isn't currently resident adds 5-20s
+  cold-start. Look at load_duration in the response (0 means warm).

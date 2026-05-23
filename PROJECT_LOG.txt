@@ -1,0 +1,268 @@
+================================================================================
+                              PROJECT LOG — leanforge
+                          newest entries at the top
+================================================================================
+
+
+-------
+2026-05-23 — milestone — Group.lean Stage-1 fully proven; v1.0.4–v1.0.6 jointly validated
+-------
+
+  Test: pow_add (induction proof), inv_op (uses prior theorem),
+  solve_left (rewrite chain) — three sorry-bearing theorems added to
+  an existing 4-decl Lean file with the inline TODO-comment-as-
+  instruction pattern. Goal: refine fills all three, removes the
+  TODO comments, leaves the other decls (identity_unique,
+  inverse_unique, left_cancel, mypow) untouched.
+
+  Result: SUCCESS in 2 iterations, $0.0394 total.
+    iter 0:  baseline (file in mid-edit state from prior failed run)
+    iter 1:  no_change — first attempt's edits were rejected
+    iter 2:  success — recent-failures memo carried iter 1's
+             rejection forward, LLM produced corrected proofs
+
+  Final proofs are real, idiomatic Lean 4:
+    - pow_add: `induction n with | zero => ... | succ k ih => ...`
+      including the Nat.add reduction trick
+      `show m.add k = m + k from rfl`
+    - inv_op: composes the previously-proven inverse_unique with an
+      inline calc chain showing (a·b)·(b⁻¹·a⁻¹) = e
+    - solve_left: four-step rw chain (← h, ← assoc, inv_left, e_left)
+
+  ALL three inline TODO comments removed per instruction. The four
+  previously-proven theorems / def mypow untouched (intended_scope
+  discipline confirmed end-to-end).
+
+  This single run jointly validates fixes from v1.0.4, v1.0.5, v1.0.6:
+    - v1.0.4 (recent_failures off-by-one): iter 1's no_change was
+      carried into iter 2's prompt as a structured failure record,
+      enabling the LLM's "remove stray c] and fix the rewrite"
+      response to address the actual prior failure.
+    - v1.0.5 (archive on new run): the prior failed run's state
+      was preserved under
+      .refine/Scratch__Group.lean.archive-20260523T135001, freeing
+      the new base_dir for this run's clean trace.
+    - v1.0.6 (JSON extractor): without it, iter 2's response would
+      have died the same way the prior run's iter 2 did. With it,
+      Claude's prose preamble was stripped and the JSON parsed
+      cleanly.
+
+  This is the first run that exercised all three fixes simultaneously
+  on a non-trivial multi-theorem input including induction. The
+  empirical signal: the system is genuinely capable of group-theory
+  proof construction at <$0.05/run when bugs aren't in the way.
+
+  Files: examples/scratch/Scratch/Group.lean (now fully proven).
+         examples/scratch/.refine/Scratch__Group.lean/ for the trace
+         (history.jsonl, iter_NNNN.lean, raw/).
+
+  Next: v1.1.0 tool-use migration per IMPROVEMENTS.txt — the
+  prose-extraction bandaid worked here but the architectural fix is
+  to bypass the prose-in-text problem entirely.
+
+
+-------
+2026-05-23 — v1.0.6 — JSON extractor for prose-wrapped LLM responses
+-------
+
+  Test: ran refine on Group.lean Stage-1 stubs (pow_add, inv_op,
+  solve_left). Iter 1 succeeded (status=regression, applied edits).
+  Iter 2 failed with: "response did not match RefineResponse schema:
+  Invalid JSON: expected value at line 1 column 1". Pydantic's
+  input_value started with "Looking at the diagnosti..." — Claude
+  emitted 1014 chars of analysis prose before the JSON object.
+
+  Bug 10 — JSON extractor was never deployed.
+    The intended _extract_json_object helper was supposed to land in
+    v1.0.1 (paired with the prefill-removal fix) but the Edit call
+    silently failed at the time and was not retried. Subsequent
+    real runs all returned clean JSON, so we never noticed. The first
+    multi-theorem run triggered Claude's "explain first" prior →
+    prose preamble → Pydantic rejection.
+    Fix: add `_extract_json_object` that finds the first `{` and
+    uses `json.JSONDecoder.raw_decode` to identify the matching
+    close. _parse_response_or_fail extracts then validates.
+
+  Verification: the actual broken iter_0002.response.json (preserved
+  by v1.0.5 archive!) now parses correctly through the fix —
+  produces the intended RefineResponse with strategy=tactic_rewrite
+  and 2 fixes. Note: archiving paid off on its first real use,
+  letting us debug against the exact broken response.
+
+  Architectural note: this is a BANDAID. The real fix is Anthropic's
+  tool-use API (server-enforced structured output, no prose-in-text
+  problem possible). Listed as v1.1.0 in IMPROVEMENTS.txt. Spec
+  rev 4.1 explicitly opted out of tool-use; that decision is now
+  reversed pending v1.1.0 work.
+
+  Files: refine/controller.py (new _extract_json_object,
+         rewritten _parse_response_or_fail),
+         refine/tests/test_controller.py (10 new tests covering the
+         extractor and parse pipeline against prose, markdown
+         fences, trailing prose, missing brace, unterminated JSON).
+
+  QA: 341 tests, ruff + mypy --strict clean.
+
+
+-------
+2026-05-23 — v1.0.5 — archive prior-run state on each new run
+-------
+
+  Test: ran refine on Group.lean three times in sequence. Symptoms
+  surfaced during multi-run use:
+    - history.jsonl interleaved iterations from all three runs in
+      one file (iter 0..4 from run 1, iter 0..1 from run 2, iter 0
+      from run 3)
+    - iter_NNNN.lean snapshots from prior runs were silently
+      overwritten when a later run reached that iteration number
+    - orphan snapshots from longer prior runs stuck around with
+      no context
+
+  Bug 9 — refine state was global per file, not per run.
+    Multi-run produced comingled history and silent overwrite of
+    prior snapshots. Made history.jsonl unreadable as a per-run
+    timeline.
+    Fix: at the start of each run, rename the existing
+    .refine/<slug>/ directory to
+    .refine/<slug>.archive-<YYYYMMDDTHHMMSS>/ (with -2, -3, ...
+    suffix on second-collision) and create a fresh empty base_dir.
+    Past runs preserved intact as sibling directories; current run
+    starts clean. Implemented as new ArtifactStore.start_new_run()
+    method replacing the bare initialize() call at refine() start.
+
+  Files: refine/artifact_store.py (new start_new_run +
+         _allocate_archive_path), refine/controller.py (call
+         start_new_run, log archive path), refine/tests/test_artifact_store.py.
+
+  QA: 331 tests, ruff + mypy --strict clean.
+
+
+-------
+2026-05-23 — v1.0.4 — four bugs from running on a real Mathlib theorem
+-------
+
+Test: prove `2 ≤ x/y + y/x` for positive reals using Mathlib.
+Before fixes: max_iters hit, no convergence.
+After fixes: 3 iterations, $0.0293, valid proof using
+  div_add_div + le_div_iff₀ + nlinarith [sq_nonneg (x - y)].
+
+  Bug 5 — file display 1-indexed, JSON ranges 0-indexed (LSP).
+    Despite a system-prompt note telling the LLM "subtract 1", the
+    model emitted displayed line numbers directly. Every edit landed
+    on the wrong line, raised OOB.
+    Fix: render file with 0-indexed line numbers matching the JSON
+    convention; remove the conversion instruction (now redundant).
+
+  Bug 6 — off-by-one in _assemble_recent_failures.
+    Slice `[-N-1:-1]` excluded the most recent iteration — the exact
+    one whose failure we wanted the LLM to learn from. Iter 2's
+    prompt was bit-identical to iter 1's → cache hit → same broken
+    response. Zero forward progress for 2 iterations.
+    Fix: `[-N:]` (include latest); also include soft_warnings as a
+    trigger so apply_errors surface in the memo.
+
+  Bug 7 — apply_edits failures weren't surfaced.
+    When edits raised OOB/overlap/non-local, the iteration logged +
+    reverted to old content. It appeared as no_change with no hint
+    to the LLM. Recent-failures memo carried nothing useful.
+    Fix: capture the exception message into the iteration's
+    soft_warnings; _describe_rejection reads soft_warnings as a
+    fallback so the memo actually tells the LLM what went wrong.
+
+  Bug 8 — redundant "subtract 1" instruction in system prompt.
+    Removed now that display matches JSON convention. Also reworded
+    EDIT RULES for clarity.
+
+  Files: refine/prompt_builder.py, refine/controller.py,
+         refine/tests/test_prompt_builder.py.
+
+
+-------
+2026-05-23 — v1.0.3 — cache-hit visibility + truthful cost
+-------
+
+  Added "[ask_llm] CACHE HIT  saved tokens in/out=N/M  (no API call)"
+  log line. On cache hits, set cost_usd = 0 and don't increment
+  cumulative_cost_usd (was inflating real billing total).
+  IterationState gains `cached: bool` field for history analysis.
+
+  Files: llm/ask_llm.py, refine/state.py, refine/controller.py,
+         refine/tests/test_state.py.
+
+
+-------
+2026-05-23 — v1.0.2 — sorry-aware success + backtick warning match
+-------
+
+  Test: refine loop on a file with two `sorry`s — short-circuited
+  to SUCCESS at iter 0, did nothing.
+
+  Bug 3 — SUCCESS criterion ignored sorries.
+    Lean reports `sorry` as a warning, not an error. Controller's
+    baseline check `if error_count == 0: return SUCCESS` exited
+    immediately on a file full of unproven theorems.
+    Fix: SUCCESS requires error_count == 0 AND no remaining
+    sorries; `_classify_status` takes `unresolved_sorry_count`.
+
+  Bug 4 — sorry-warning regex expected quotes, Lean uses backticks.
+    Lean message is `declaration uses ` + backtick + `sorry` +
+    backtick. Regex matched single/double quotes only. Result:
+    original_sorries was always empty, so even the bug-3 fix would
+    have passed the success gate.
+    Fix: regex accepts all three quote styles (backtick, single,
+    double); primary test case uses backticks.
+
+  Files: refine/controller.py, refine/signature.py,
+         refine/tests/test_signature.py.
+
+
+-------
+2026-05-23 — v1.0.1 — two contract bugs from first live run
+-------
+
+  Test: refine loop on `examples/scratch/Scratch/Basic.lean` (type
+  mismatch). First live run after writing 328 passing unit tests.
+
+  Bug 1 — severity string vs int contract.
+    leanforge serializes severity as string labels ("error"). Refine
+    code checked integer 1 (LSP raw form). Unit tests passed because
+    they used the integer form — perfect case of testing the wrong
+    assumption. Live run reported error_count=0 despite visible
+    type-mismatch error.
+    Fix: SEVERITY_*_VALUES tuples accepting both int and string.
+
+  Bug 2 — Sonnet 4.6 rejects assistant message prefill.
+    HTTP 400: "This model does not support assistant message
+    prefill. The conversation must end with a user message." Affects
+    Sonnet 4.6, Opus 4.7, Haiku 4.5 — the whole "force JSON via
+    prefill" design from spec rev 4.1 is unimplementable on current
+    models.
+    Fix: ASSISTANT_PREFILL = None (kept in API surface for future
+    models). Controller uses json.JSONDecoder.raw_decode to extract
+    the first JSON object from the response, handles prose/fences.
+
+  Files: refine/controller.py, refine/outcome.py,
+         refine/goal_status.py, refine/prompt_builder.py,
+         llm/ask_llm.py.
+
+
+-------
+2026-05-23 — v1.0.0 — initial implementation complete
+-------
+
+  refine/ package implemented per REFINE.spec.txt rev 4.1.
+  17 modules across coords, schema, edits, fingerprint, state,
+  outcome, goal_status, diff_summary, cost, env, artifact_store,
+  evaluator, signature, prompt_builder, pause, controller, __main__.
+
+  328 unit tests passing; 91% line + branch coverage.
+  ruff check + format clean. mypy --strict clean.
+
+  First live run on examples/scratch/Scratch/Basic.lean (type
+  mismatch) worked: 1 iteration, $0.0084, type-annotation_fix
+  strategy with confidence 0.99.
+
+
+================================================================================
+                               END OF LOG
+================================================================================

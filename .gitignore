@@ -21,3 +21,22 @@ venv/
 # Local
 *.local
 /tmp/
+
+# Local model artifacts (large, ephemeral)
+llm/gguf-cache/
+llm/.cache/
+
+# Per-run refine state (snapshots, history, raw LLM I/O)
+.refine/
+**/.refine/
+
+# pytest-cov binary DB
+.coverage
+
+# Secrets — never commit
+.env
+.env.local
+*.env.local
+
+# Local-only working files (not for the repo)
+CODE_QUALITY_STANDARD.txt

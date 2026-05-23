@@ -1,0 +1,211 @@
+================================================================================
+                          IMPROVEMENTS — leanforge backlog
+                       forward-looking; sorted by impact
+================================================================================
+
+Companion to:
+  PROJECT_LOG.txt   — WHAT HAPPENED (historical, newest at top)
+  REFINE.spec.txt   — WHAT'S DECIDED (v1 scope lock + v1.5/v2 buckets)
+  IMPROVEMENTS.txt  — WHAT COULD HAPPEN (this file)
+
+Items here are NOT commitments. They're observed-from-real-runs or
+imagined-during-design candidates. When one gets picked up:
+  1. it moves into REFINE.spec.txt under the appropriate version bucket
+  2. its line here gets struck through with [DONE] + commit SHA
+  3. PROJECT_LOG.txt gets an entry when it lands
+
+Within each section, top item is highest impact / lowest cost.
+
+
+--------------------------------------------------------------------------------
+CORRECTNESS / ROBUSTNESS
+--------------------------------------------------------------------------------
+
+  * Prune unused `have` statements in final proofs.
+      Observed: AmGm.lean v1.0.4 run left `have hxy : 0 < x * y := mul_pos
+      hx hy` unused — Claude added it on a failed attempt and the
+      survivor proof didn't consume it. Add a final cleanup pass that
+      asks Claude to tighten the proof once SUCCESS is reached, or
+      detect unused hypotheses via Lean's unused-variable linter.
+
+  * Mathlib lemma name drift detection.
+      Observed: Claude tried `le_div_iff` (the pre-Mathlib-v4 name),
+      hit ELAB_ERROR, recovered to `le_div_iff₀` on retry. Cost: 1
+      wasted iteration. Could pre-supply a curated alias map in the
+      system prompt, OR run `Lean Search` / `loogle` on hypothesized
+      lemma names before sending them to Claude.
+
+  * Theorem-signature preservation: stronger semantic equivalence check.
+      Currently text-level (sig_hash). A determined LLM can weaken a
+      theorem by introducing a redefinition (`def BadTrue := True;
+      theorem foo : BadTrue := trivial`). v2 work per spec.
+
+  * AST-aware pre-validation.
+      Run a syntax-only parse on the modified file BEFORE invoking full
+      elaboration. Catches obvious bracket/paren mistakes in <100 ms
+      vs the 10-30 s of a full Mathlib elaboration. Listed as v1.5 in
+      spec.
+
+
+--------------------------------------------------------------------------------
+UX / DX
+--------------------------------------------------------------------------------
+
+  * Pause / step mode wiring.
+      pause.py is fully implemented (c/r/n/a/q/Q/s/d/h/g/b menu).
+      controller.py only dispatches `auto` mode. Adding policy + step
+      is a small switch in the loop body — call prompt_user() when the
+      controller decides to pause and act on the PauseChoice.
+
+  * `--no-cache` and `--clear-cache` CLI flags.
+      Currently: `rm -rf llm/.cache` between runs. Inconvenient and
+      easy to forget. --no-cache bypasses the cache for one run;
+      --clear-cache wipes it before starting.
+
+  * `--purge-archives [DURATION]` CLI flag.
+      v1.0.5 added per-run archive directories
+      (.refine/<slug>.archive-<timestamp>/). Over many runs these
+      accumulate. A `--purge-archives 7d` flag would delete archives
+      older than the given duration; no arg = nuke all archives.
+      Currently the manual workaround is `rm -rf .refine/*.archive-*`.
+
+  * `--show-diff` flag.
+      At end of run, print `diff iter_0000.lean <final>` so the user
+      sees what changed without a separate cat/diff invocation.
+
+  * Open `.refine/` folder automatically after run.
+      Optional --open flag, macOS-only. Useful when running interactively.
+
+  * Better terminal output formatting.
+      The current stderr stream is a flat plain-text log. Colors for
+      status (green=success, yellow=progress, red=regression), boxed
+      status block at the end. ANSI escape codes; gated on isatty().
+
+  * Cost preview before each call.
+      Print estimated tokens + cost before sending. Helps catch
+      runaway-prompt scenarios early. Already have the cost table.
+
+  * Strategy-nudge auto-suggest at pause.
+      When pausing on CHURN or NO_CHANGE, suggest a strategy that
+      hasn't been tried yet ("tried tactic_rewrite × 2; consider
+      type_annotation_fix?"). Cheap heuristic.
+
+
+--------------------------------------------------------------------------------
+PERFORMANCE / COST
+--------------------------------------------------------------------------------
+
+  * Declaration slicing — promote from v1.5 to v1.1.
+      Spec rev 4.1 cost note: ">$0.05/iter on files >500 lines" is the
+      trigger to promote. AmGm.lean was 4 lines so it didn't trigger;
+      next medium-file run probably will. Send focused decl + immediate
+      neighbors instead of full file. Likely 5-10x cost reduction on
+      large files.
+
+  * Anthropic prompt-cache activation.
+      Currently `cache_prompt=True` but the system prompt for refine
+      is below the 1024-token minimum block size, so caching never
+      activates. Either pad the system prompt to >1024 tokens (with
+      useful content, not filler), or include the file content in the
+      cached block (more complex but higher hit rate).
+
+  * Parallel candidate generation (v2).
+      Ask N candidates per iteration at temp > 0, pick best by error
+      count + fingerprint diversity. Immutable snapshots already support
+      this. Architecture-ready; needs the orchestration.
+
+  * Beam search across iterations (v2).
+      Maintain top-K candidate branches. Combine with parallel candidates.
+
+
+--------------------------------------------------------------------------------
+DIAGNOSTIC / OBSERVABILITY
+--------------------------------------------------------------------------------
+
+  * Live token usage display.
+      Stream the running token count to stderr during long generations.
+      Anthropic SDK has streaming tokens; we currently use stream=false.
+
+  * Goal-state evolution visualization.
+      Render the goal text from each iteration side by side, highlight
+      diffs. Useful for "did my proof actually approach the goal" review.
+
+  * History.jsonl human viewer.
+      A small CLI like `refine inspect <project> <file>` that formats
+      history.jsonl as a readable timeline. The Python one-liners in
+      RUN_COMMANDS.txt are functional but not pretty.
+
+  * Optional events.jsonl population.
+      events.jsonl is committed-to in the spec (controller event log)
+      but the controller doesn't actually write to it yet. Wire up
+      pause / user_choice / budget_raised / loop_end events.
+
+
+--------------------------------------------------------------------------------
+ARCHITECTURE / EXTENSION
+--------------------------------------------------------------------------------
+
+  * [v1.1.0 — DECIDED] Anthropic tool-use API as the primary
+    structured-output path.
+      v1.0.6 showed that prose-extraction is fragile: Claude readily
+      prefixes JSON with reasoning prose on complex tasks; the
+      extractor is a bandaid that can fail on edge cases (multiple
+      braces in prose, illustrative {...} examples, partial output).
+      Tool-use forces the model to emit a typed argument block — no
+      prose-in-text problem possible. Migration path:
+        1. Define a Pydantic-derived tool schema for RefineResponse
+        2. Add a tool_use branch in ask_llm (alongside the current
+           plain-text branch)
+        3. Controller calls ask_llm with the tool definition
+        4. Response.text comes from the tool_use block's input dict
+        5. Drop _extract_json_object once stable
+      Spec rev 4.1 explicitly opted out of tool-use; that decision
+      is reversed by the v1.0.6 evidence.
+
+  * OpenAI provider in ask_llm.
+      Registry already has `provider` field on ModelConfig; "openai"
+      models would slot in alongside "anthropic". Needs: _call_openai
+      branch, OpenAI SDK error→typed-exception mapping, OPENAI_API_KEY
+      in .env.example. Spec rev 5 covers the shape.
+
+  * Multi-file editing.
+      Currently `<file_slug>/` directory per file under .refine/.
+      Adding multi-file support is additive: refine() takes a list of
+      relpaths instead of one, evaluator runs leanforge per file,
+      controller tracks per-file state. Spec lists as v2.
+
+
+--------------------------------------------------------------------------------
+OPEN QUESTIONS (decide when next relevant)
+--------------------------------------------------------------------------------
+
+  * Sig_changed: soft today (warning + escalate on repeat). Real
+    runs should tell us if it over-accepts. If yes, promote to hard.
+
+  * Wall-clock cap.
+      We have lean_timeout (per subprocess), cost cap (cumulative $),
+      iteration cap (count). No wall-clock cap. A bad LLM response
+      could in principle stall the loop for tens of minutes. Add
+      --max-wall-seconds?
+
+  * Auto-commit successful runs.
+      `git add <file>; git commit -m "refine: fix <file>"` on SUCCESS,
+      gated on a flag. Tempting but writes to user's repo state.
+      Could surprise; needs a clear opt-in.
+
+  * Output streaming.
+      Currently the user waits N seconds in silence between iterations.
+      Streaming the LLM's response as it generates would feel more
+      responsive. Trade-off: harder to parse JSON incrementally; would
+      need a JSON streaming parser.
+
+  * Distinction between "Lean elaboration error" and "edits invalid".
+      Both currently end up as failure modes but they're conceptually
+      different — one means the LLM proposed bad code, the other means
+      the LLM produced bad coordinates. The recent_failures memo should
+      probably surface this distinction more loudly.
+
+
+================================================================================
+                                 END
+================================================================================

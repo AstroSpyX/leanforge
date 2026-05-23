@@ -1,0 +1,343 @@
+LOCAL MODELS — ARCHIVED INVESTIGATION
+======================================
+
+This document captures everything done to evaluate local LLMs as the
+backbone of leanforge's LLM stage. The conclusion was to NOT use local
+models for production. This file preserves the install, eval, and
+findings so that:
+
+  (a) Future maintainers don't repeat the spike
+  (b) The Ollama setup can be revived as an optional fallback later
+      (offline / triage of trivial cases / privacy-bound deployment)
+      without re-discovering the gotchas
+
+The active LLM stack is Anthropic API, documented in ../LLM.spec.txt.
+Eval and findings raw notes are in SPIKES.md (also kept).
+
+
+WHY WE LOOKED AT LOCAL MODELS
+-----------------------------
+The original plan (LLM.spec.txt revisions 1-3) targeted small (7-14B)
+local LLMs via Ollama. The reasoning:
+
+  - Compare specialist (Lean-fine-tuned) vs generalist behavior
+  - No per-call cost during high-volume iteration
+  - Offline / private operation
+  - Foundation for a self-contained tool that ships without API keys
+  - Learn what prover-specific models actually do
+
+Cost was never the deciding factor — Claude Sonnet beat all local
+models on Lean tactic quality going in. The hope was that one of the
+specialists (Kimina-Prover or DeepSeek-Prover-V2) would be good
+enough to handle the bulk of cases, escalating to Claude only on
+hard failures. The eval did not support that hope.
+
+
+WHAT WAS INSTALLED
+------------------
+All of this remains on disk and can be revived without re-install.
+
+System packages (Homebrew):
+  brew install ollama       Local LLM server, daemon on localhost:11434
+  brew install uv           Python tool runner; provisions Python 3.12
+                            and packages on demand
+
+Python packages used (auto-installed via `uv run --with ...`):
+  leanclient                Used by leanforge.py (LSP wrapper over lake serve)
+  anthropic                 The currently-active client (post-pivot)
+  python-dotenv             For .env loading (post-pivot)
+  huggingface_hub           For downloading GGUFs from HuggingFace
+                            (note: `huggingface-cli` was renamed to `hf`
+                            in recent versions — old syntax silently
+                            exits 0 with help text)
+
+Models stored at ~/.ollama/models/ as content-addressed blobs:
+  qwen2-math:7b             4.4 GB
+  llama3.1:8b               4.9 GB
+  phi4:14b                  9.1 GB
+  kimina-prover:q6_k        ~6 GB    (custom, from mradermacher GGUF)
+  deepseek-prover:q5_k_m    ~4.7 GB  (custom, from unsloth GGUF)
+
+GGUFs and Modelfiles for the two custom models are at:
+  llm/gguf-cache/Kimina-Prover-Preview-Distill-7B.Q6_K.gguf
+  llm/gguf-cache/DeepSeek-Prover-V2-7B-Q5_K_M.gguf
+  llm/gguf-cache/Modelfile.kimina
+  llm/gguf-cache/Modelfile.deepseek
+
+Total local-model footprint: ~30 GB disk, up to ~30 GB GPU memory
+when models are simultaneously resident on a 36 GB M3 Pro.
+
+
+INSTALLATION RECIPE (from scratch)
+-----------------------------------
+Reproduces the full local-models environment.
+
+Step 1: install prerequisites
+  brew install ollama uv
+
+Step 2: start the Ollama daemon (port 11434)
+  ollama serve > /tmp/ollama.log 2>&1 &
+
+Step 3: pull the three in-library models
+  ollama pull qwen2-math:7b
+  ollama pull llama3.1:8b
+  ollama pull phi4:14b
+
+Step 4: for prover models not in the official library, use the GGUF
+route. Existence is checked via:
+
+  for m in kimina-prover deepseek-prover-v2; do
+    code=$(curl -s -o /dev/null -w "%{http_code}" \\
+           "https://ollama.com/library/$m")
+    echo "$code  $m"
+  done
+
+GET only — Ollama returns 405 on HEAD for valid models, which makes
+HEAD-based checks ambiguous. 200 means present, 404 means use GGUF.
+
+Step 5: GGUF route for kimina-prover and deepseek-prover-v2
+
+  mkdir -p llm/gguf-cache && cd llm/gguf-cache
+
+  # Kimina (Q6_K, ~5.8 GB)
+  uv run --with huggingface_hub --python 3.12 -- \\
+    hf download mradermacher/Kimina-Prover-Preview-Distill-7B-GGUF \\
+                Kimina-Prover-Preview-Distill-7B.Q6_K.gguf \\
+                --local-dir .
+
+  # DeepSeek (Q5_K_M, ~4.6 GB)
+  uv run --with huggingface_hub --python 3.12 -- \\
+    hf download unsloth/DeepSeek-Prover-V2-7B-GGUF \\
+                DeepSeek-Prover-V2-7B-Q5_K_M.gguf \\
+                --local-dir .
+
+  cat > Modelfile.kimina <<'EOF'
+FROM ./Kimina-Prover-Preview-Distill-7B.Q6_K.gguf
+PARAMETER num_ctx 32768
+PARAMETER temperature 0.6
+PARAMETER top_p 0.95
+EOF
+
+  cat > Modelfile.deepseek <<'EOF'
+FROM ./DeepSeek-Prover-V2-7B-Q5_K_M.gguf
+PARAMETER num_ctx 32768
+PARAMETER temperature 0
+EOF
+
+  ollama create kimina-prover:q6_k -f Modelfile.kimina
+  ollama create deepseek-prover:q5_k_m -f Modelfile.deepseek
+
+Step 6: verify all five are visible to Ollama
+  ollama list
+
+Notes on the GGUF route:
+  - Prefer the model author's published GGUF when available, then
+    well-known community quantizers (mradermacher, unsloth) over
+    converting from scratch. Q4_K_M measurably degrades math
+    reasoning vs Q5_K_M / Q6_K — pick Q5+ for prover models.
+  - HF GGUF filenames vary by uploader: `unsloth/...` prefixes the
+    filename with the full model name; `mradermacher/...` uses a
+    dot separator. Confirm exact filename via the HF API before
+    downloading:
+      curl -s https://huggingface.co/api/models/<repo> | jq '.siblings'
+  - Do NOT put a SYSTEM line in the Modelfile. The application
+    (prompts.py if we ever build one) must be the single source of
+    truth for system prompts. Two sources is a debugging nightmare.
+
+
+OLLAMA OPERATIONS REFERENCE
+---------------------------
+Day-to-day commands used during the spike.
+
+Daemon management:
+  ollama serve                      foreground
+  ollama serve > /tmp/ollama.log 2>&1 &    background
+  brew services start ollama        background via launchd (auto-restart on login)
+
+Inventory:
+  ollama list                       installed models
+  ollama ps                         currently resident in RAM
+  ollama show <name>                model metadata (chat template, params)
+  ollama rm <name>                  delete a model
+
+Inference (one-shot):
+  ollama run <model> "your prompt"  prompt as positional arg = clean exit
+  echo "prompt" | ollama run <m>    AVOID — does not reliably exit on stdin EOF
+
+HTTP API (more reliable for scripting):
+  curl http://localhost:11434/api/chat -d '{
+    "model": "<name>",
+    "stream": false,
+    "options": {"temperature": 0.6, "top_p": 0.95, "num_predict": 1500},
+    "messages": [
+      {"role": "system", "content": "..."},
+      {"role": "user", "content": "..."}
+    ]
+  }'
+
+  Key option: `num_predict` caps output length — essential for
+  prover models that otherwise generate thousands of tokens.
+
+  Streaming variant: set "stream": true and use `curl -N` to
+  disable buffering. Each line of response is one chunk.
+
+Memory behavior:
+  - Lazy load on first call to a given model
+  - Unload after 5 min idle (default); override with keep_alive:
+      "keep_alive": "10m"    extend
+      "keep_alive": -1       indefinite
+      "keep_alive": 0        unload immediately after this call
+  - Resident memory is dominated by the KV cache for the configured
+    context window, NOT the weights file size. llama3.1:8b at
+    num_ctx=32768 is 11 GB resident; weights alone are ~5 GB.
+  - On Apple Silicon, weights load on the GPU (100% GPU per
+    `ollama ps`). Unified memory means "GPU" allocations still
+    count against system RAM.
+
+Process anatomy on macOS:
+  ollama serve   ~100 MB daemon process
+  ollama runner  per-model child process holding the weights;
+                 this is the one with multi-GB RSS in Activity Monitor.
+                 Search for "runner" not "ollama" to find loaded models.
+
+Storage on disk:
+  ~/.ollama/models/blobs/    sha256-named binary blobs (weights)
+  ~/.ollama/models/manifests/  JSON pointers giving model names
+
+Updating a model:
+  ollama pull <name>   re-pull; only changed layers are downloaded
+
+
+EVAL METHODOLOGY
+----------------
+Single prompt sent to all five models, same chat-format messages:
+
+  System:  "You are an expert in mathematics and Lean 4."
+  User:    "Prove the following Lean 4 theorem:
+
+           ```lean4
+           import Mathlib
+
+           theorem sqrt_two_irrational : Irrational (Real.sqrt 2) := by
+             sorry
+           ```
+
+           Replace the sorry with a valid proof."
+
+Options: temperature=0.6, top_p=0.95, num_predict=1500.
+Picked to match Kimina's trained defaults (per the HF model card)
+since Kimina was the most-likely-to-succeed candidate. Other models
+accept these values without issue.
+
+The five curls (one per model) are committed at evals/curls.txt and
+can be re-run any time.
+
+For DeepSeek specifically, two additional formats were tested:
+  - Naive (same as above): empty 1-token response
+  - "Complete the following Lean 4 code... proof plan" wrapper from
+    DeepSeek's HF model card, with temp=0: 1500-token repetition loop
+  - Same wrapper with temp=0.6: 764 tokens of broken English / repeated
+    proof outlines, no Lean code
+
+Results summary (from SPIKES.md Spike 3):
+
+  | Model                  | tok/s | Verdict on Lean output             |
+  |------------------------|------:|-------------------------------------|
+  | kimina-prover:q6_k     |  22   | Syntactically valid; self-ref bug   |
+  | qwen2-math:7b          |  30   | Total fiction (Lean 3/4 mix)        |
+  | llama3.1:8b            |  27   | Invented identifiers                |
+  | phi4:14b               |  15   | Invented, Lean 3 namespace bleed    |
+  | deepseek-prover:q5_k_m |   —   | Empty / loop / gibberish (3 modes)  |
+
+None produced compilable Lean.
+
+
+WHY WE DECIDED AGAINST LOCAL
+----------------------------
+1. NONE compiled. Even Kimina's "best" output (`apply
+   irrational_sqrt_two` inside a theorem named `irrational_sqrt_two`)
+   is illegal recursion that won't elaborate.
+
+2. Specialization beat scale (Kimina 7B > phi4 14B for Lean shape),
+   but neither was correct.
+
+3. Generalists hallucinated Mathlib lemma names with confidence,
+   producing "fluent gibberish" that looks like Lean at a glance
+   but doesn't typecheck.
+
+4. Prover models are format-rigid: Kimina cannot be prompted out of
+   its chain-of-thought; DeepSeek breaks silently or loops when
+   the chat template doesn't match training.
+
+5. None could fix their own output given an error. The leanforge
+   fix loop is fundamentally iterative ("here's an error, patch
+   the code"). Local models were trained for one-shot generation,
+   not error-driven repair.
+
+Claude (Sonnet 4.6 default, Opus 4.7 for hard cases) handles all
+five issues:
+  - Follows "output only a code block" instructions
+  - Multi-turn self-correction works
+  - 200K context fits source + diagnostics + relevant imports
+  - No quant-vs-recall tradeoff
+  - No format fragility
+The cost (~$3-15/M tokens for Sonnet) is real but acceptable for
+this use case.
+
+
+GOTCHAS LEARNED (preserved for the future)
+-------------------------------------------
+- `huggingface-cli` renamed to `hf` in recent versions. Old syntax
+  silently exits 0 with help output. Always use `hf download ...`.
+- `ollama search` is NOT a real subcommand. Use HTTP GET against
+  `https://ollama.com/library/<model>` (200 = present, 404 = not).
+- HEAD-based existence checks are unreliable (405 vs 404 ambiguity).
+- HF GGUF filenames are NOT standardized across uploaders. Confirm
+  via HF API before downloading.
+- `echo "prompt" | ollama run MODEL | tail -3` hangs because
+  `ollama run` doesn't reliably exit on stdin EOF and downstream
+  `tail` buffers until pipe closure. Use the positional-arg form
+  `ollama run MODEL "prompt"` or the HTTP API.
+- macOS doesn't ship a `timeout` command by default. Use `gtimeout`
+  from `coreutils`, or skip caps.
+- zsh's `${PIPESTATUS[0]}` is not bash-compatible — use zsh's
+  `$pipestatus[1]` array form.
+- Kimina was trained at temperature=0.6 with top_p=0.95. Greedy
+  decoding (temp=0) gives noticeably worse output.
+- DeepSeek-Prover-V2 is extremely format-rigid:
+    * Adding a system message → empty 1-token response
+    * temp=0 with the proper format → repetition loop
+    * temp=0.6 with the proper format → fluent gibberish, no code
+  Suspect chat-template mismatch in the unsloth GGUF, but a fix
+  was not attempted because Kimina was already better.
+- Ollama spawns a separate `runner` subprocess per loaded model.
+  In Activity Monitor, the multi-GB resident process is `runner`
+  (or `ollama runner`), not the small ~100 MB `ollama serve`
+  daemon. Search for "runner".
+- macOS unified memory means GPU allocations count against system
+  RAM. With kimina (7.7 GB) + deepseek (22 GB resident at 32K ctx)
+  + anything else, you exceed 36 GB and trigger eviction.
+
+
+WHAT REMAINS ON DISK
+--------------------
+All preserved for future revival:
+
+  ~/.ollama/                              all five models (~30 GB)
+  llm/gguf-cache/                         GGUF source files + Modelfiles
+  llm/evals/curls.txt                     reusable per-model eval curls
+  llm/SPIKES.md                           raw spike notes (kept as primary
+                                          findings record)
+
+Not preserved as code:
+  No models.py / prompts.py / ask_llm transport for Ollama.
+  Those were never written — the spike concluded before the
+  implementation phase. Reviving local would mean either:
+    (a) implementing an Ollama transport in the new ask_llm.py
+        (extend ModelConfig with provider="ollama", add a transport
+        branch). See LLM.spec.txt rev 5 for the provider abstraction.
+    (b) keeping the local stack as a separate `ask_llm_local`
+        function with its own thin transport.
+
+Either is roughly half a day's work given everything in this
+document.

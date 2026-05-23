@@ -1,0 +1,166 @@
+# cd into the project
+--------------------------------------------------------------------------------
+
+  cd /Users/pavel/lean-projects/leanforge
+
+
+# Reset the example file to its broken state
+--------------------------------------------------------------------------------
+
+  cat > examples/scratch/Scratch/Challenge.lean << 'EOF'
+  theorem one_plus_n (n : Nat) : 1 + n = n + 1 := by
+    sorry
+
+  theorem add_assoc_comm (a b c : Nat) : a + b + c = c + a + b := by
+    sorry
+  EOF
+
+  Type the lines exactly as shown. After the closing `EOF` press Enter
+  and the shell returns to the prompt — the file is written.
+
+
+# Run the refine loop
+--------------------------------------------------------------------------------
+
+  uv run --with anthropic --with python-dotenv --with leanclient --with pydantic \
+      --python 3.12 -m refine \
+      --project-root examples/scratch \
+      --file Scratch/Challenge.lean \
+      --goal "Replace both sorrys with valid Lean 4 proofs. These are arithmetic identities on natural numbers, provable by omega or Nat.add_comm." \
+      --mode auto \
+      --max-iters 3 \
+      --max-cost-usd 0.10
+
+  Expected stderr on a cold (no-cache) run:
+    [ask_llm] model=sonnet (anthropic:claude-sonnet-4-6) mode=raw ...
+    HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+    iter=1 status=success outcome=success errors=0 resolved=2 new=0 cost=$0.00XX
+    final_status=success  iterations=2  cost=$0.00XX
+
+  Expected stderr on a re-run when the cache is populated:
+    [ask_llm] CACHE HIT  model=sonnet  saved tokens in/out=N/M  (no API call)
+    iter=1 status=success outcome=success errors=0 resolved=2 new=0 cost=$0.0000
+    final_status=success  iterations=2  cost=$0.0000
+
+
+# Open the corrected file in VS Code
+--------------------------------------------------------------------------------
+
+  code examples/scratch/Scratch/Challenge.lean
+
+
+--------------------------------------------------------------------------------
+5. Inspect the per-run state (snapshots, history, events)
+--------------------------------------------------------------------------------
+
+  open examples/scratch/.refine/Scratch__Challenge.lean/
+
+  Contains:
+    iter_0000.lean       starter (broken)
+    iter_NNNN.lean       snapshot after each iteration
+    history.jsonl        per-iteration metrics + LLM metadata
+    events.jsonl         controller decisions + user actions
+    current.json         pointer to the latest iteration
+    raw/                 raw LLM prompt + response payloads (per iter)
+
+
+--------------------------------------------------------------------------------
+6. Inspect the local LLM disk cache (sha256-keyed JSON files)
+--------------------------------------------------------------------------------
+
+  open llm/.cache/
+
+  One JSON file per unique (model + system + messages + temp + max_tokens)
+  combination. Hit by ask_llm before any API call. Cleared with rm -rf.
+
+
+--------------------------------------------------------------------------------
+7. Inspect the raw LLM I/O for a specific iteration
+--------------------------------------------------------------------------------
+
+  open examples/scratch/.refine/Scratch__Challenge.lean/raw/
+
+  iter_NNNN.prompt.json     exact system + user + prefill sent to Claude
+  iter_NNNN.response.json   exact text returned
+
+  Useful for debugging: see what the model received and what it sent
+  back, byte for byte. Off by default in v1 only if you pass
+  --no-keep-raw-llm-io.
+
+
+--------------------------------------------------------------------------------
+8. Read history.jsonl as a quick per-iteration table
+--------------------------------------------------------------------------------
+
+  python3 -c '
+  import json
+  for line in open("examples/scratch/.refine/Scratch__Challenge.lean/history.jsonl"):
+      r = json.loads(line)
+      print(f"iter {r[\"iteration\"]}: {r[\"status\"]:>10}  "
+            f"errors={r[\"error_count\"]}  resolved={r[\"resolved_count\"]}  "
+            f"cost=${r[\"cost_usd\"]:.4f}  cached={r[\"cached\"]}  "
+            f"llm={r[\"llm_summary\"] or \"(baseline)\"}")
+  '
+
+
+--------------------------------------------------------------------------------
+9. Diff: starter (iter 0) vs final state
+--------------------------------------------------------------------------------
+
+  diff examples/scratch/.refine/Scratch__Challenge.lean/iter_0000.lean \
+       examples/scratch/Scratch/Challenge.lean
+
+
+--------------------------------------------------------------------------------
+10. Clear caches and per-run state
+--------------------------------------------------------------------------------
+
+  Local LLM response cache (forces a real API call next run):
+    rm -rf llm/.cache
+
+  Per-run refine state — note: refine auto-archives prior runs as
+  .refine/<slug>.archive-<timestamp>/ on each new run. The current
+  base dir is the latest run only. To wipe both current AND all
+  archives for a file:
+    rm -rf examples/scratch/.refine/Scratch__Challenge.lean*
+
+  Wipe all archives across all files (current state preserved):
+    rm -rf examples/scratch/.refine/*.archive-*
+
+  Both cache and all refine state:
+    rm -rf llm/.cache examples/scratch/.refine
+
+
+--------------------------------------------------------------------------------
+11. Inspect a prior run's archive
+--------------------------------------------------------------------------------
+
+  Each refine run preserves the previous run's state under
+  .refine/<slug>.archive-<YYYYMMDDTHHMMSS>/. List them:
+
+    ls -ld examples/scratch/.refine/*.archive-*
+
+  Compare two runs of the same file:
+
+    diff -r examples/scratch/.refine/Scratch__Group.lean.archive-A \
+           examples/scratch/.refine/Scratch__Group.lean.archive-B
+
+  Pull a specific iteration from an archive for inspection:
+
+    cat examples/scratch/.refine/Scratch__Group.lean.archive-X/iter_0003.lean
+
+
+--------------------------------------------------------------------------------
+Bonus: dry-run summary
+--------------------------------------------------------------------------------
+
+  After any run, this one-liner tells you what happened:
+
+    python3 -c '
+    import json, pathlib
+    p = pathlib.Path("examples/scratch/.refine/Scratch__Challenge.lean/history.jsonl")
+    rows = [json.loads(l) for l in p.read_text().splitlines()]
+    total_cost = sum(r["cost_usd"] for r in rows)
+    print(f"iterations: {len(rows)}  total billed: ${total_cost:.4f}  "
+          f"final status: {rows[-1][\"status\"]}")
+    '

@@ -1,0 +1,99 @@
+import Mathlib
+
+/-
+  Reciprocal / AM–HM inequality practice over ℝ.
+  Replace each `sorry` with a proof. A1 and B1 are worked as templates.
+
+  General recipe for goals containing `1/x`:
+    1. `have hx' : x ≠ 0 := hx.ne'`            -- one per variable
+    2. Clear denominators, either
+         • rewrite the whole gap as ONE fraction:
+             `have key : LHS - RHS = (SOS) / (x*y*z) := by field_simp; ring`
+           then `0 ≤ (SOS)/(x*y*z)` by `positivity`, and `linarith [key, …]`.
+         • or for `a/b ≤ c/d`:  `rw [div_le_div_iff (by positivity) (by positivity)]`
+           then close the polynomial goal with
+             `nlinarith [sq_nonneg (x-y), mul_pos hx hy, mul_nonneg hz.le (sq_nonneg (x-y)), …]`.
+  Useful lemmas: sq_nonneg, mul_pos, mul_nonneg, div_nonneg, div_le_div_iff,
+                 one_div_lt_one_div_of_lt, sub_pos, pow_pos, field_simp, positivity,
+                 ring, linarith, nlinarith, polyrith.
+-/
+
+/-! ## A. Two variables (warm-up) -/
+
+-- A1.  x + 1/x ≥ 2.   WORKED TEMPLATE: write the gap as a single fraction.
+theorem A1 (x : ℝ) (hx : 0 < x) : 2 ≤ x + 1 / x := by
+  have hx' : x ≠ 0 := hx.ne'
+  have key : x + 1 / x - 2 = (x - 1) ^ 2 / x := by field_simp; ring
+  have h : 0 ≤ (x - 1) ^ 2 / x := by positivity
+  linarith [key, h]
+
+-- A2.  x/y + y/x ≥ 2.         hint: gap = (x-y)^2 / (x*y)
+theorem A2 (x y : ℝ) (hx : 0 < x) (hy : 0 < y) : 2 ≤ x / y + y / x := by
+  sorry
+
+-- A3.  (x+y)(1/x+1/y) ≥ 4.    hint: expand to 2 + (A2); or SOS (x-y)^2 / (x*y)
+theorem A3 (x y : ℝ) (hx : 0 < x) (hy : 0 < y) :
+    4 ≤ (x + y) * (1 / x + 1 / y) := by
+  sorry
+
+-- A4.  1/x + 1/y ≥ 4/(x+y).   hint: div_le_div_iff (positivity), nlinarith [sq_nonneg (x-y)]
+theorem A4 (x y : ℝ) (hx : 0 < x) (hy : 0 < y) :
+    4 / (x + y) ≤ 1 / x + 1 / y := by
+  sorry
+
+/-! ## B. Three variables (core AM–HM) -/
+
+-- B1.  (x+y+z)(1/x+1/y+1/z) ≥ 9.   WORKED TEMPLATE: Schur-style SOS.
+--      gap = ( z(x-y)² + x(y-z)² + y(z-x)² ) / (xyz)  ≥ 0.
+theorem B1 (x y z : ℝ) (hx : 0 < x) (hy : 0 < y) (hz : 0 < z) :
+    9 ≤ (x + y + z) * (1 / x + 1 / y + 1 / z) := by
+  have hx' : x ≠ 0 := hx.ne'
+  have hy' : y ≠ 0 := hy.ne'
+  have hz' : z ≠ 0 := hz.ne'
+  have key : (x + y + z) * (1 / x + 1 / y + 1 / z) - 9
+      = (z * (x - y) ^ 2 + x * (y - z) ^ 2 + y * (z - x) ^ 2) / (x * y * z) := by
+    field_simp; ring
+  have h : 0 ≤ (z * (x - y) ^ 2 + x * (y - z) ^ 2 + y * (z - x) ^ 2) / (x * y * z) := by
+    positivity
+  linarith [key, h]
+
+-- B2.  x+y+z = 1  →  1/x+1/y+1/z ≥ 9.   hint: reuse B1, then `rw [h]` / substitute.
+theorem B2 (x y z : ℝ) (hx : 0 < x) (hy : 0 < y) (hz : 0 < z)
+    (h : x + y + z = 1) : 9 ≤ 1 / x + 1 / y + 1 / z := by
+  sorry
+
+-- B3.  1/x+1/y+1/z ≥ 9/(x+y+z).   hint: div_le_iff (positivity), then reuse B1.
+theorem B3 (x y z : ℝ) (hx : 0 < x) (hy : 0 < y) (hz : 0 < z) :
+    9 / (x + y + z) ≤ 1 / x + 1 / y + 1 / z := by
+  sorry
+
+-- B4.  (x/y+y/x) + (y/z+z/y) + (x/z+z/x) ≥ 6.   hint: three copies of A2.
+theorem B4 (x y z : ℝ) (hx : 0 < x) (hy : 0 < y) (hz : 0 < z) :
+    6 ≤ x / y + y / x + (y / z + z / y) + (x / z + z / x) := by
+  sorry
+
+/-! ## C. Strict inequalities & the `<` direction -/
+
+-- C1.  x < y  →  1/y < 1/x.    hint: `exact one_div_lt_one_div_of_lt hx hxy`
+theorem C1 (x y : ℝ) (hx : 0 < x) (hxy : x < y) : 1 / y < 1 / x := by
+  sorry
+
+-- C2.  x ≠ 1  →  x + 1/x > 2  (strict).   hint: (x-1)^2 > 0 via sub_ne_zero + pow_pos.
+theorem C2 (x : ℝ) (hx : 0 < x) (hx1 : x ≠ 1) : 2 < x + 1 / x := by
+  sorry
+
+/-! ## D. Challenge (★★) -/
+
+-- D1.  Nesbitt:  a/(b+c) + b/(c+a) + c/(a+b) ≥ 3/2.
+--      hint: rw [div_add_div _ _ .., ..] or field_simp; div_le_div_iff;
+--            nlinarith [sq_nonneg (a-b), sq_nonneg (b-c), sq_nonneg (a-c),
+--                       mul_pos ha hb, mul_pos hb hc, mul_pos ha hc].
+theorem D1 (a b c : ℝ) (ha : 0 < a) (hb : 0 < b) (hc : 0 < c) :
+    3 / 2 ≤ a / (b + c) + b / (c + a) + c / (a + b) := by
+  sorry
+
+-- D2.  cyclic AM–GM:  x/y + y/z + z/x ≥ 3.   (NOT symmetric — harder for nlinarith.)
+--      gap·(xyz) = x²z + y²x + z²y − 3xyz ≥ 0; try a big nlinarith hint set or `polyrith`.
+theorem D2 (x y z : ℝ) (hx : 0 < x) (hy : 0 < y) (hz : 0 < z) :
+    3 ≤ x / y + y / z + z / x := by
+  sorry

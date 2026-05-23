@@ -1,0 +1,1091 @@
+REFINE COMPONENT — PLAN (revision 4.1 — IMPLEMENTATION TARGET)
+================================================================
+
+This is the implementation target. Rev 4.1 applies six tightly-scoped
+point-fixes from a final review pass; no architecture changes from
+rev 4. After 4.1, no further spec revisions until v1 has produced
+empirical data from real Lean files.
+
+CHANGES FROM REVISION 4 (point-fixes)
+  - Post-Pydantic semantic validation: well-formed ranges, valid
+    diagnostic_ids, intended_scope decls must exist in the file
+  - Sorry/admit detection uses leanforge's built-in
+    "declaration uses 'sorry'" warning, NOT string scanning
+  - Recent-failures memo is STRUCTURED records, not human strings
+  - (q) quit defaults to NON-destructive (keeps current file);
+    (Q) added for explicit rollback
+  - Raw LLM I/O snapshots default to ON (was OFF); cheap on small
+    files and the v1 "deterministic replay" claim needs them
+  - Honest cost-on-medium-files note + clear trigger to promote
+    declaration slicing from v1.5 to v1.1
+
+CHANGES FROM REVISION 3 (in priority order)
+  1. intended_scope is structured AND advisory, not name-only and
+     authoritative. ScopeItem(name, range?). System-derived scope
+     from edits is the source of truth; LLM scope is a hint.
+     Violations are WARNINGS in v1, not hard rollbacks.
+  2. Loop detection is 3-strike, not 1-shot. First repeat: log.
+     Second: warn. Third: pause. Avoids killing legitimate
+     re-visits during search.
+  3. Fingerprint adds the goal/termGoal text (normalized). Without
+     it, the same Lean error in different proof states collapses
+     to one fingerprint and distorts progress vs churn.
+  4. Signature drift downgraded to SOFT violation. Hard violations
+     remain (decl removed, sorry introduced, axiom introduced).
+     SIG_CHANGED sets `signature_drift_warning=true` and only
+     escalates after repeated drift.
+  5. Retry cost accounting: track `retry_count`, inflate cumulative
+     cost by 15% per retry. Budget enforcement now matches reality.
+  6. Diff summary adds error_delta (resolved_fp_count, new_fp_count,
+     persistent_fp_count) so "did we make semantic progress?" is
+     visible in one line.
+  7. FOCUS markers in the prompted file: `-- BEGIN FOCUS` /
+     `-- END FOCUS` around enclosing decls of current errors.
+     Cheap context-narrowing without architecture change.
+  8. Goal status enum (UNCHANGED, PROGRESS, SHIFTED, RESOLVED) per
+     iteration. Heuristic; improves controller decisions.
+  9. Pause adds `(n) nudge` to switch repair_strategy without
+     polluting prompt history via (r) revise.
+  10. Schema: SCOPE_VIOLATION becomes a soft signal. WARNING_REASONS
+      enum added alongside FailureReason.
+
+
+STRICT v1 SCOPE LOCK
+--------------------
+
+Everything in this section is in v1. Items not in this section are
+NOT in v1.
+
+  v1 MUST HAVE
+  ────────────
+    - Strict JSON: prompt + prefill + Pydantic + one corrective retry
+    - replace_range edits, descending application
+    - Lean subprocess timeout (30 s default)
+    - File snapshots + history.jsonl + events.jsonl + current.json
+    - Diagnostic fingerprinting: message + enclosing_decl + goal
+    - Both raw AND canonicalized diagnostics stored
+    - (file_hash, diagnostics_hash) state_hash with 3-strike loop
+      detection (log → warn → pause)
+    - Text-level theorem preservation:
+        HARD: sorry introduced, axiom introduced, decl removed
+        SOFT: signature changed (warning, escalate on repeat)
+    - intended_scope as ScopeItem(name, range?); LLM advisory,
+      system-derived from edits authoritative; violations WARN
+    - Cost guard: --max-cost-usd 1.00 default, retry-inflated
+    - Deterministic replay: prompt_sha256, response_sha256,
+      prompt_version, environment fingerprint, retry_count;
+      raw prompt + response files stored by default (the hashes
+      identify; the raw files enable actual replay)
+    - Repair strategy classification from LLM
+    - Generation mode separate from repair mode
+    - Structured failure reasons + warning reasons enums
+    - Coordinate model: UTF-16 in, code-points internal
+    - Controller event log (events.jsonl, separate from history)
+    - Goal status heuristic (UNCHANGED / PROGRESS / SHIFTED /
+      RESOLVED) per iteration
+    - FOCUS markers in the prompted file content
+    - Modes: auto / step / policy
+    - Pause prompt: (c/r/n/a/q/s/d/h/g/b)
+
+  v1.5 (NOT in v1)
+  ────────────────
+    - Real declaration-level slicing (send subset of file instead
+      of full file with FOCUS markers)
+    - AST-aware edit validation before invoking elaboration
+    - More aggressive diagnostic normalization based on real-world
+      message variants discovered during v1 runs
+    - Generation vs repair temperature split (gen 0.2, repair 0.0)
+
+  v2 (NOT in v1, NOT in v1.5)
+  ───────────────────────────
+    - Parallel candidate generation
+    - Beam search across iterations
+    - Branch ranking
+    - Semantic equivalence checking (definitional unfolding)
+    - Multi-file editing
+    - OpenAI / other-provider transport
+    - Mining history.jsonl for fine-tuning data
+
+
+WHAT WE ALREADY HAVE
+--------------------
+
+  leanforge.py
+      Lean file → rich JSON diagnostics. Per-diagnostic: severity,
+      range, messageText, messageInteractive, goal, termGoal,
+      enclosingDeclaration, sourceSnippet. Top-level: counts,
+      elaborationSucceeded, timedOut. The loop's deterministic
+      evaluator.
+
+  llm/ask_llm.py + Response + 7 typed errors
+      Claude-backed call with retry, local disk cache, optional
+      Anthropic prompt cache. Provider abstraction. Modes: "raw",
+      "tactic" today; refine will add "lean_generate" and
+      "lean_repair".
+
+  llm/models.py, llm/cache.py, llm/__init__.py
+      Sonnet/opus/haiku registry; SHA-256-keyed disk cache;
+      .env auto-load.
+
+  examples/scratch/ + examples/sample_output.json
+      Test target (deliberate type error) and committed reference
+      diagnostic JSON for offline tests.
+
+
+INTEGRATION SHAPE — THE LOOP
+----------------------------
+
+  ┌──────────────────────────────────────────────────────────────┐
+  │   Goal (English) [+ optional starter .lean file]             │
+  │                       │                                      │
+  │                       ▼                                      │
+  │       Bootstrap: generate OR adopt starter                   │
+  │                       │                                      │
+  │                       ▼                                      │
+  │       ┌────────── Repair loop ─────────────┐                 │
+  │       │  prompt_builder (system + user + prefill)            │
+  │       │                │                                     │
+  │       │                ▼                                     │
+  │       │  ask_llm  ──► JSON response (strict)                 │
+  │       │                │                                     │
+  │       │                ▼                                     │
+  │       │  schema validate + edit apply                        │
+  │       │                │                                     │
+  │       │                ▼                                     │
+  │       │  artifact_store: snapshot + history + events         │
+  │       │                │                                     │
+  │       │                ▼                                     │
+  │       │  evaluator: leanforge (with timeout)                 │
+  │       │                │                                     │
+  │       │                ▼                                     │
+  │       │  fingerprint + outcome + diff + goal_status          │
+  │       │                │                                     │
+  │       │                ▼                                     │
+  │       │  controller decision                                 │
+  │       │    ──► success ──► return                            │
+  │       │    ──► pause   ──► await human                       │
+  │       │    ──► continue ──► back to prompt_builder ↑         │
+  │       └──────────────────────────────────────┘               │
+  └──────────────────────────────────────────────────────────────┘
+
+
+TWO MODES — GENERATION vs REPAIR
+---------------------------------
+
+  GENERATION
+      Input: user goal + Lean toolchain pin. No diagnostics.
+      Output: RefineResponse with a single edit replacing empty
+              content; strategy = "generation".
+      Used: at most once at the start, when no usable starter
+            file was provided.
+
+  REPAIR
+      Input: current file + structured diagnostics + optional
+             human guidance + recent failures memo.
+      Output: structured edits referencing diagnostic IDs.
+      Used: every iteration after generation (or starter adoption).
+
+Same schema, same edit-apply path. System prompt and user-message
+contents differ. v1 uses temperature=0.0 for both; v1.5 may split.
+
+
+STRUCTURED JSON FROM THE LLM — STRICT
+--------------------------------------
+
+  1. SYSTEM PROMPT discipline: "Output a single JSON object. No
+     markdown, no prose, no text outside the braces. First byte
+     of your response is `{`."
+  2. ASSISTANT PREFILL: final {"role": "assistant", "content": "{"}.
+  3. STRICT PARSE + PYDANTIC + ONE CORRECTIVE RETRY: json.loads →
+     pydantic. On failure: one retry with "invalid JSON at offset
+     N: <msg>; return only the JSON object". Second failure →
+     LLM_ERROR, pause. Retry count tracked for cost.
+
+
+THE RESPONSE SCHEMA (Pydantic)
+------------------------------
+
+  RefineResponse {
+      summary             : str
+      strategy            : str               # RepairStrategy enum
+      reasoning           : str               # ~3 sentences max
+      confidence          : float             # 0.0 .. 1.0
+      intended_scope      : list[ScopeItem]   # advisory hint
+      fixes               : list[Fix]
+      remaining_blockers  : list[str]         # diagnostic IDs given up
+  }
+
+  ScopeItem {
+      name  : str                             # decl name LLM plans to touch
+      range : Range | null                    # optional range hint
+  }
+
+  Fix {
+      diagnostic_ids : list[int]
+      edits          : list[Edit]
+  }
+
+  Edit {
+      kind        : Literal["replace_range"]
+      range       : Range
+      replacement : str
+  }
+
+  Range {
+      start : { line : int, character : int } # LSP UTF-16 convention
+      end   : { line : int, character : int }
+  }
+
+  RepairStrategy (enum, LLM picks one):
+      import_fix, namespace_fix, tactic_rewrite,
+      theorem_specialization, type_annotation_fix, coercion_fix,
+      induction_repair, rewrite_chain_fix, generation, other
+
+WHY ScopeItem instead of bare list[str]:
+  Lean has nested namespaces, duplicated names across modules,
+  local sections. Names alone are ambiguous. The optional range
+  hint dramatically reduces false-positive scope warnings when
+  declarations collide.
+
+  The LLM's intended_scope is ADVISORY. The system computes
+  system_intended_scope = decls actually touched by the LLM's
+  edits, derived from edit ranges and the known declaration map.
+  System scope is the source of truth.
+
+  If LLM scope and system scope disagree:
+      decls_touched_not_declared = system - LLM
+  Non-empty → WARNING (not failure, not rollback). Surfaced in
+  history.jsonl as `scope_drift_warning`. Repeated drift escalates
+  per the convergence rules below.
+
+
+EDIT MODEL — JSON-DRIVEN FILE MODIFICATIONS
+-------------------------------------------
+
+ONLY one operation kind: `replace_range`. Insert = zero-width;
+delete = empty replacement; full rewrite = (0,0)..(EOF).
+
+COORDINATE MODEL:
+  Input from leanforge: LSP positions, UTF-16 code units.
+  Internal: Python code-point indices. Converted at boundary
+  (refine/coords.py). Both stored in history for cross-reference.
+
+LINE ENDING CANONICALIZATION:
+  All file content normalized to `\n` on ingest and in snapshots.
+
+APPLICATION RULES:
+  - Sort by `start` DESCENDING, apply in that order
+  - Overlapping → REJECT (OVERLAPPING_EDITS)
+  - Out-of-bounds → REJECT (OOB_EDIT)
+  - Identity edits (replacement == existing text) → silently skip
+    (logged at DEBUG level so history review can still see them)
+  - Apply to the SAME snapshot the LLM saw
+
+POST-PYDANTIC SEMANTIC VALIDATION:
+  Pydantic enforces structure (types, required fields). It does
+  NOT catch semantically wrong outputs that happen to type-check.
+  Before applying any edits, run a semantic validation pass:
+
+    - Every `range.end >= range.start` (line then character).
+      A backwards range parses as valid JSON and a valid Range
+      dataclass but is meaningless. → SCHEMA_VALIDATION.
+    - Every `diagnostic_ids` entry refers to an ID we actually
+      injected into this turn's diagnostics. Phantom IDs are a
+      sign the model hallucinated the diagnostic list. →
+      SCHEMA_VALIDATION.
+    - Every `intended_scope[*].name` refers to a top-level
+      declaration name we extracted from the current file. The
+      model declaring scope on `frobnicate` when no such decl
+      exists is operationally noise; flag it. → SCHEMA_VALIDATION.
+
+  These failures use the existing one-corrective-retry path. The
+  retry message specifies WHICH check failed (e.g. "diagnostic
+  id 99 does not exist; valid ids are 0..7").
+
+MAX EDIT SCOPE (per iteration):
+  Defaults: max_changed_lines = 30, max_changed_decls = 2
+  Exceeded → NON_LOCAL_REWRITE, one corrective retry, then pause.
+  Overridable: --max-changed-lines, --max-changed-decls,
+               --allow-non-local
+
+SCOPE CHECK (advisory, soft):
+  After application, system_intended_scope = unique decls whose
+  ranges any edit overlaps. Compared to llm_intended_scope.
+  Disagreement → warning entry in history, not a rollback.
+  Two consecutive disagreements where the SAME unauthorized decl
+  was touched → pause (suggests the LLM is confused about scope).
+
+
+SEMANTIC ITERATION STATE
+------------------------
+
+DIAGNOSTIC FINGERPRINTS:
+
+  fingerprint = sha256(
+      severity                    ||
+      normalized_message          ||
+      enclosing_declaration       ||
+      normalized_goal_or_term     ||  # NEW in rev 4
+  )
+
+  The goal/termGoal field discriminates same-message-different-
+  context errors. "type mismatch" inside a proof of `n + 0 = n`
+  is not the same problem as "type mismatch" inside `bad : Nat`.
+  Without it, those would share a fingerprint and progress
+  tracking would lie.
+
+  Goal text gets the same normalization treatment as messages
+  (metavar/universe/hygienic name stripping).
+
+  Three derived sets per iteration:
+      resolved_fp   = prev_fps - curr_fps
+      new_fp        = curr_fps - prev_fps
+      persistent_fp = prev_fps & curr_fps
+
+DIAGNOSTIC NORMALIZATION (for the message field of the hash):
+  - Metavariable names: `?m.12345` → `?m`
+  - Universe metavars: `?u.7` → `?u`
+  - Hygienic names: `_uniq.42` → `_uniq`, `_hyg.N` → `_hyg`
+  - Whitespace runs → single space
+  - Source-line numbers embedded in messages → `<line>`
+  Same normalizer applied to goal/termGoal text.
+
+Both RAW and CANONICALIZED diagnostics stored in history.jsonl.
+
+PROGRESS / CHURN / REGRESSION criteria:
+  PROGRESS   ⇔ |resolved_fp| > 0 AND
+                |new_fp ∩ recently_resolved_fp| < threshold
+  CHURN      ⇔ |new_fp ∩ recently_resolved_fp| > 0
+  REGRESSION ⇔ |new_fp| > |resolved_fp| AND |new_fp| > 0
+  NO_CHANGE  ⇔ curr_fps == prev_fps
+  SUCCESS    ⇔ no errors
+
+
+GOAL STATUS HEURISTIC (per iteration)
+--------------------------------------
+
+Beyond error counts and fingerprints, classify how the proof goal
+itself moved between iterations:
+
+  GoalStatus enum:
+      UNCHANGED     # same primary goal text as previous iter
+      PROGRESS      # primary goal text simplified (fewer hyps,
+                    # smaller target, normalized form)
+      SHIFTED       # primary goal text changed but not clearly
+                    # simpler (sideways move)
+      RESOLVED      # primary goal closed (success)
+
+Heuristic implementation:
+  - "Primary goal" = goal text from the FIRST error diagnostic
+    that has a non-null goal field
+  - PROGRESS detection: simpler if normalized character count
+    decreased by >10%, OR hypothesis count decreased, OR target
+    text appears as a substring of prev target
+  - SHIFTED otherwise when goal text differs
+  - UNCHANGED if normalized goal text matches
+
+Used by the controller to refine PROGRESS vs CHURN classification
+when fingerprint deltas are ambiguous (e.g. same error count,
+fingerprints rotated, but goal status = PROGRESS → continue).
+
+Heuristic, not perfect. Documented as such.
+
+
+COMPILE OUTCOME CATEGORIES
+--------------------------
+
+  Outcome:
+      SUCCESS, PARSE_ERROR, ELAB_ERROR, TACTIC_ERROR,
+      IMPORT_ERROR, TIMEOUT, PANIC, OOM
+
+Classifier (refine/outcome.py):
+  - Kind contains "parser" OR message starts with "unexpected
+    token" → PARSE_ERROR
+  - Diagnostic on an `import` line → IMPORT_ERROR
+  - Subprocess killed by our timer → TIMEOUT
+  - Subprocess SIGKILL/SIGABRT without our timer → PANIC or OOM
+  - Otherwise, any error → ELAB_ERROR
+  - No errors → SUCCESS
+
+Policy:
+  - TIMEOUT / PANIC / OOM: rollback, pause immediately
+  - IMPORT_ERROR twice consecutively: pause
+  - PARSE_ERROR: often high-confidence fixable; continue
+
+
+GOAL / THEOREM PRESERVATION (TEXT-LEVEL)
+-----------------------------------------
+
+NOT semantic equivalence. The check catches gross text-level
+tampering only. Determined LLMs can still weaken theorems via
+redefinition or import shadowing — v2 work.
+
+At iter 0, extract from the starter file:
+  original_signatures = { decl_name → sha256(canonical_sig_text) }
+  original_decl_names = set of top-level decl names
+  original_axioms     = set of top-level `axiom` decl names
+
+Each iteration after edits:
+  - Re-extract signatures from the new file
+  - HARD violations (rollback, pause):
+      DECL_REMOVED       (decl in original missing)
+      AXIOM_INTRODUCED   (new top-level `axiom` decl)
+      SORRY_INTRODUCED   (Lean emitted "declaration uses 'sorry'"
+                          warning for a decl that didn't have it
+                          at iter 0)
+  - SOFT violation (warning, NOT rollback):
+      SIG_CHANGED        (sig_hash differs)
+        - First occurrence per decl: signature_drift_warning
+        - Two consecutive iterations with NEW sig changes:
+          escalate to pause
+        - User can --allow-signature-changes to suppress entirely
+
+Why SOFT for SIG_CHANGED: legitimate Lean refactors (strengthening
+a theorem, reordering arguments) routinely change signatures even
+when the proof improves. Hard rollback on every sig change creates
+false-positive pauses that mask real progress.
+
+`axiom` detection: enumerate `^\s*axiom\s+\w+` at top level of
+the new file (not in comments/strings). Diff against
+original_axioms.
+
+`sorry` / `admit` detection: USE LEANFORGE'S BUILT-IN SIGNAL.
+The Lean compiler already emits a warning of the form
+"declaration uses 'sorry'" for any decl whose body contains
+`sorry` (or `admit`, which is the alias). leanforge surfaces
+all warnings in its diagnostics output. We scan that warning
+list, NOT the file text. Rationale:
+
+  - String scanning false-positives on comments, string literals,
+    docstrings, identifiers like `not_sorry`, `im_sorry_lemma`
+  - A proper Lean tokenizer is not available in Python
+  - The compiler's own determination is authoritative
+
+Concretely:
+  iter_0_sorry_decls = decls in starter with the warning
+  iter_N_sorry_decls = decls in current with the warning
+  newly_introduced   = iter_N_sorry_decls - iter_0_sorry_decls
+  newly_introduced non-empty → SORRY_INTRODUCED
+
+Overrideable via CLI:
+  --allow-signature-changes      suppresses SIG_CHANGED entirely
+  --allow-sorry                  suppresses SORRY_INTRODUCED
+  --allow-axiom                  suppresses AXIOM_INTRODUCED
+  --allow-decl-removal           suppresses DECL_REMOVED
+
+
+LOOP / CHURN DETECTION — 3-STRIKE
+----------------------------------
+
+state_hash = sha256(file_content_canonical || sorted_fingerprints)
+
+Tracking state_hash because file alone misses env-driven
+differences and fingerprints alone miss content-only oscillation.
+
+  state_hash_history = list per iteration
+  3-strike policy:
+      1st repeat in last 5 iters → log only
+      2nd repeat                  → warning, surface in pause prompt
+                                    next time controller checks
+      3rd repeat                  → LOOP_DETECTED, pause
+
+A repeat in the last 5 iterations counts. Older repeats are
+informational (legitimate search behavior).
+
+Why 3-strike: LLMs naturally revisit states during import-fix
+and instance-resolution sequences. Immediate-pause on the first
+repeat killed productive convergence in benchmark scenarios.
+
+
+SUBPROCESS / LEAN TIMEOUT
+-------------------------
+
+Default: lean_timeout_seconds = 30 (CLI: --lean-timeout).
+SIGTERM, 2 s grace, SIGKILL. Outcome = TIMEOUT; diagnostics = []
+with `{"timeout": true}` marker. Rollback, pause.
+
+
+COST GUARD WITH RETRY INFLATION
+--------------------------------
+
+  Per-iteration tokens from ask_llm.Response:
+    input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens
+  Per-iteration retry_count (corrective retries this turn)
+
+  Cost (refine/cost.py):
+    base_cost   = sum(tokens * COSTS[model][kind])
+    retry_mult  = 1 + 0.15 * retry_count       # 15% per retry
+    iter_cost   = base_cost * retry_mult
+    cumulative_cost_usd += iter_cost
+
+Cost table (cents per 1M tokens):
+  "claude-sonnet-4-6":  in=300, out=1500, cache_create=375, cache_read=30
+  "claude-opus-4-7":    in=1500, out=7500, cache_create=1875, cache_read=150
+  "claude-haiku-4-5":   in=100, out=500, cache_create=125, cache_read=10
+  (Verify against current Anthropic pricing at integration time.)
+
+CLI guards:
+  --max-cost-usd        default 1.00, BUDGET_EXCEEDED when ≥
+  --max-input-tokens    optional cumulative input cap
+  --max-output-tokens   optional cumulative output cap
+
+Without retry inflation, repeated JSON-parse retries silently
+inflated real cost ~10-20% over the tracked number. Now the
+budget matches what gets billed.
+
+KNOWN COST PROFILE ON MEDIUM/LARGE FILES (honest disclosure):
+  v1 sends the full file with FOCUS markers, not a sliced subset.
+  Rough cost model on Sonnet 4.6:
+
+    File size   Errors  Approx user-msg tokens   Approx $/iter
+    ─────────   ──────  ──────────────────────   ─────────────
+    50 lines      3       ~1.2 K                  ~$0.004
+    200 lines     5       ~3.5 K                  ~$0.011
+    500 lines    20      ~10  K                   ~$0.030
+    1000 lines   30      ~18  K                   ~$0.055
+
+  With the default --max-cost-usd 1.00:
+    Small files: 200+ iterations available, plenty of headroom
+    Medium files: 30-90 iterations, comfortable
+    Large files (>500 lines, many errors): 15-30 iterations,
+      may hit the cap before convergence
+
+  TRIGGER TO PROMOTE DECLARATION SLICING TO v1.1:
+    If the first 5-10 real runs include any file where cost-per-
+    iter exceeds $0.05 (i.e., file is genuinely large), promote
+    declaration slicing from v1.5 to v1.1. Architecture has the
+    seams for it; FOCUS markers were the cheap stand-in. Slicing
+    would cut the user message to the focused decls + neighbors,
+    likely 5-10x cost reduction on large files.
+
+  This is a known limitation, not a surprise. v1 is correct for
+  small-to-medium files; if your project lives in 1000-line
+  files, accept the cost or wait for v1.1.
+
+
+ITERATION DIFF SUMMARIES
+------------------------
+
+Per-iteration record:
+
+  diff_summary = {
+      "lines_added":          int,
+      "lines_removed":        int,
+      "lines_changed":        int,
+      "declarations_touched": list[str],   # heuristic
+      "edits_applied":        int,
+      "max_edit_size_lines":  int,
+      "error_delta": {
+          "resolved_fp_count":   int,      # NEW in rev 4
+          "new_fp_count":        int,
+          "persistent_fp_count": int
+      },
+      "goal_status":          GoalStatus    # NEW in rev 4
+  }
+
+error_delta is the controller's "did we make semantic progress"
+signal in one place; previously you had to compute it from
+fingerprint sets. Now it's a single readable record.
+
+
+CONVERGENCE / STUCK DETECTION
+-----------------------------
+
+Per-iteration status (controller.py):
+
+  if state_hash 3rd-repeat in last 5:    LOOP_DETECTED
+  elif outcome == TIMEOUT:                STUCK_TIMEOUT
+  elif hard_policy_violation:             POLICY_VIOLATION
+  elif outcome == SUCCESS:                SUCCESS
+  elif PROGRESS criterion:                PROGRESS
+  elif CHURN criterion:                   CHURN
+  elif fingerprints unchanged:            NO_CHANGE
+  elif REGRESSION criterion:              REGRESSION
+  else:                                   PROGRESS (small)
+
+Pause triggers (policy mode):
+  LOOP_DETECTED, STUCK_TIMEOUT,
+  POLICY_VIOLATION (hard only)              → always pause
+  NO_CHANGE × 2 consecutive                 → pause
+  CHURN × 2 consecutive                     → pause
+  REGRESSION × 1                            → continue
+  REGRESSION × 2 consecutive                → pause
+  LLM confidence < 0.3                      → pause
+  signature_drift × 2 consecutive (NEW)     → pause
+  scope_drift on SAME decl × 2 (NEW)        → pause
+  BUDGET_EXCEEDED                           → pause
+  MAX_ITERS                                 → pause
+
+Goal status modifier:
+  If a pause is about to fire because of NO_CHANGE or REGRESSION,
+  but goal_status == PROGRESS, downgrade to continue. The goal
+  moved even if the error counts didn't move with it.
+
+
+ARTIFACT HISTORY — VERSIONS + REPLAY
+-------------------------------------
+
+Original file stays at its original path.
+
+Shadow history at <project_root>/.refine/<file_slug>/:
+
+  iter_NNNN.lean             snapshot per iteration
+  current.json               { current_iter, current_path,
+                               original_path, env_fingerprint }
+  history.jsonl              per-iteration record
+  events.jsonl               controller event log
+
+history.jsonl per-row (additions in rev 4 marked NEW):
+
+  {
+    "iter":                int,
+    "prompt_version":      str,
+    "env_fingerprint":     str,
+    "started_at":          float,
+    "finished_at":         float,
+    "wall_ms":             int,
+    "status":              Status,
+    "outcome":             Outcome,
+    "goal_status":         GoalStatus,                # NEW
+    "error_count":         int,
+    "warning_count":       int,
+    "resolved_count":      int,
+    "new_count":           int,
+    "persistent_count":    int,
+    "file_sha256":         str,
+    "state_hash":          str,
+    "diff_summary":        {...},                     # includes error_delta NEW
+    "diagnostics_fingerprints":[str, ...],
+    "raw_diagnostics":     [{...}, ...],
+    "canonical_diagnostics":[{...}, ...],
+    "prompt_sha256":       str,
+    "response_sha256":     str,
+    "retry_count":         int,                        # NEW
+    "model":               str,
+    "provider":            str,
+    "provider_model_id":   str,
+    "temperature":         float | null,
+    "llm_summary":         str,
+    "llm_strategy":        str,
+    "llm_confidence":      float,
+    "llm_reasoning":       str,
+    "llm_intended_scope":  [{name, range?}, ...],     # ScopeItem NEW
+    "system_intended_scope":[str, ...],               # NEW (truth)
+    "edits_applied":       int,
+    "remaining_blockers":  list[str],
+    "tokens": {
+      "input": int, "output": int,
+      "cache_creation": int, "cache_read": int,
+      "cumulative_input": int, "cumulative_output": int,
+      "base_cost_usd": float,                         # NEW
+      "retry_multiplier": float,                       # NEW
+      "cost_usd": float,
+      "cumulative_cost_usd": float
+    },
+    "hard_violations":     list[str],                  # was policy_violations
+    "soft_warnings":       list[str],                  # NEW (sig_drift, etc.)
+    "scope_warnings":      list[str],                  # NEW (decls in
+                                                       # system-LLM diff)
+    "preservation_check":  {...}
+  }
+
+Raw prompts/responses for full replay (ON by default in v1):
+  .refine/<slug>/raw/iter_NNNN.prompt.json
+  .refine/<slug>/raw/iter_NNNN.response.json
+  CLI: --no-keep-raw-llm-io to disable. Default on because the v1
+  "deterministic replay" property is meaningless without these
+  files: prompt_sha256 + response_sha256 in history.jsonl identify
+  payloads, but identification without storage is not replay.
+  Cost is small (typically <20 KB per iter on small files).
+
+ENVIRONMENT FINGERPRINT (refine/env.py):
+  env_fingerprint = sha256(lake_manifest || lean_toolchain)
+  Recorded per iteration. Drift mid-loop logs a warning.
+
+CONTROLLER EVENT LOG (events.jsonl):
+  Separate from per-iteration history. One line per controller
+  decision or user action:
+
+    { "ts": ..., "event": "loop_start",   "args": {...} }
+    { "ts": ..., "event": "pause",        "reason": "LOOP_DETECTED",
+                                          "iter": 5 }
+    { "ts": ..., "event": "user_choice",  "choice": "n",
+                                          "new_strategy": "tactic_rewrite",
+                                          "iter": 5 }
+    { "ts": ..., "event": "budget_raised","from": 1.00, "to": 2.00 }
+    { "ts": ..., "event": "loop_end",     "exit_code": 0 }
+
+
+STRUCTURED FAILURE + WARNING REASONS
+-------------------------------------
+
+  FailureReason (rollback + pause):
+      INVALID_JSON
+      SCHEMA_VALIDATION
+      EMPTY_RESPONSE
+      OVERLAPPING_EDITS
+      OOB_EDIT
+      NON_LOCAL_REWRITE
+      POLICY_VIOLATION       # hard only: sorry / axiom / decl removal
+      LOOP_DETECTED
+      TIMEOUT_LEAN
+      BUDGET_EXCEEDED
+
+  WarningReason (logged, may escalate; NO rollback alone):
+      SIG_CHANGED            # signature drift; soft
+      SCOPE_DRIFT            # touched decl not in LLM intended_scope
+      ENV_DRIFT              # env_fingerprint changed mid-loop
+      LOOP_NEAR_REPEAT       # 2nd state_hash repeat
+
+
+CONTROLLER POLICY — AUTO / STEP / POLICY
+-----------------------------------------
+
+  auto      Never pauses on policy. Still pauses on hard failures.
+  step      Pauses after EVERY iteration.
+  policy    Default. Pauses on the triggers above.
+
+Pause prompt:
+
+  [paused at iter N]  status: <Status>  reason: <FailureReason or None>
+  warnings: <comma-separated WarningReasons, if any>
+  goal_status: <UNCHANGED | PROGRESS | SHIFTED | RESOLVED>
+  errors: <C>  warnings: <W>  resolved-this-turn: <R>  new-this-turn: <Z>
+  cost: $<usd>  cumulative tokens: <in>/<out>  retries: <N>
+
+  (c) continue       keep going on same plan
+  (r) revise         add free-form guidance to next prompt
+  (n) nudge          switch repair_strategy (input one of the
+                     RepairStrategy enum values; injected into the
+                     next prompt without touching the recent-failures
+                     memo or the user-guidance slot)
+  (a) accept         exit with current file as final
+  (q) quit           NON-destructive: exit with the CURRENT file
+                     intact. Same behavior as (a) but without the
+                     "this is the final answer" intent. Default
+                     destination when user hits the pause prompt
+                     by accident.
+  (Q) reset          DESTRUCTIVE: rollback to iter_0000 (original
+                     starter) and exit. Confirmation required —
+                     prompts "About to discard N iterations and
+                     restore original. Type YES to confirm." Any
+                     other response aborts the reset.
+  (s) show           print current file
+  (d) diags          print current diagnostics (numbered)
+  (h) history        error/resolved/goal_status timeline
+  (g) diff           diff vs previous iteration
+  (b) budget         raise cost cap, continue
+
+Rationale for q/Q split: rollback-on-quit-keystroke is a
+silent-data-loss trap. The capital-letter convention plus
+confirmation gives a clear escalation path for users who
+genuinely want to throw work away.
+
+`(n) nudge` exists so users can steer strategy without using
+(r) revise (which accumulates as free-form guidance and pollutes
+prompt history). Strategy choices route the next prompt's hint
+field. Example: stuck in `rewrite_chain_fix` oscillation; nudge
+to `tactic_rewrite` to break the loop without rewriting guidance.
+
+A pause never modifies the file.
+
+
+PROMPT BUILDER
+--------------
+
+PROMPT VERSIONING:
+  PROMPT_VERSION constants per builder function ("repair_v1",
+  "generate_v1"). Stored in history.
+
+System prompt for REPAIR (long enough to benefit from Anthropic
+prompt cache):
+  - Role: Lean 4 theorem-repair engine
+  - Toolchain pin (Lean 4.29.1, Mathlib v4.29.1)
+  - Output rules (JSON only, no markdown, schema below)
+  - Edit rules: replace_range only, descending application,
+    respect max scope, no sorry, no axiom, prefer local fixes
+    (sig changes allowed but discouraged if avoidable)
+  - intended_scope is REQUIRED but ADVISORY — declare decls you
+    plan to touch
+  - The exact RefineResponse JSON Schema
+  - prompt_version: "repair_v1"
+
+User message — REPAIR mode:
+  - User's English goal (a few sentences)
+  - Current file content with line-numbered preamble and FOCUS
+    markers around enclosing decls of current errors:
+
+        001 | import Mathlib
+        002 |
+        003 | -- BEGIN FOCUS: bad
+        004 | def bad : Nat := "not a number"
+        005 | -- END FOCUS
+        006 |
+        007 | -- (rest of file)
+        ...
+
+    FOCUS regions are computed from
+    enclosingDeclaration on each error diagnostic. If multiple
+    errors share an enclosing decl, one FOCUS block per decl.
+    If a file has no errors (start of repair after generation),
+    no FOCUS markers.
+  - Numbered diagnostics array. Each carries:
+        id, severity, fingerprint, range, raw messageText,
+        goal, termGoal, enclosingDeclaration
+  - Recent failures memo (last up to 3) — STRUCTURED records,
+    not free-form strings. Each entry:
+
+        {
+          "iter":                   int,
+          "status":                 Status,
+          "failure_or_warning":     FailureReason | WarningReason,
+          "declarations_affected":  list[str],
+          "edits_applied":          int,
+          "rejected_because":       str       # short, mechanical
+        }
+
+    Example serialization in the prompt:
+
+        [
+          { "iter": 6, "status": "POLICY_VIOLATION",
+            "failure_or_warning": "SORRY_INTRODUCED",
+            "declarations_affected": ["sqrt_two_irrational"],
+            "edits_applied": 2,
+            "rejected_because":
+              "decl `sqrt_two_irrational` was not in iter_0 sorry
+               list; Lean reported 'declaration uses sorry' after
+               your edit" },
+          { "iter": 5, "status": "REGRESSION",
+            "failure_or_warning": null,
+            "declarations_affected": ["sqrt_two_irrational", "lemma2"],
+            "edits_applied": 4,
+            "rejected_because":
+              "error count rose from 3 to 7; previous attempt
+               introduced new errors in `lemma2`" }
+        ]
+
+    Structured records give the model actionable specifics (which
+    declaration, what mechanical reason) instead of vague hints.
+  - Optional human guidance from previous (r) pause
+  - Optional strategy nudge from previous (n) pause:
+        "Strategy hint for this turn: tactic_rewrite"
+  - Declaration listing: bulleted file decl names with FOCUS
+    markers indicating which are in current focus
+
+User message — GENERATION mode:
+  - User's English goal, toolchain pin, "produce initial file"
+    instruction, RefineResponse schema, prompt_version: "generate_v1"
+
+Assistant prefill: `{`
+
+What we DO NOT include:
+  - history.jsonl (only the curated recent-failures memo)
+  - Prior file contents
+  - Prior LLM responses
+  - Multi-turn accumulation
+
+Each iteration is self-contained context plus the recent-failures
+memo. Deliberate: avoids unbounded prompt growth.
+
+
+DIRECTORY LAYOUT
+----------------
+
+  leanforge/
+    refine/
+      __init__.py
+      __main__.py             CLI (`python -m refine ...`)
+      controller.py           main loop + mode dispatch + event log
+      prompt_builder.py       system + user + prefill + versioning +
+                              FOCUS markers
+      evaluator.py            leanforge subprocess + timeout + outcome
+      artifact_store.py       snapshots + history.jsonl + events.jsonl
+      edits.py                replace_range apply
+      schema.py               Pydantic models (incl. ScopeItem)
+      fingerprint.py          normalization + sha256
+                              (message + decl + goal)
+      goal_status.py          UNCHANGED/PROGRESS/SHIFTED/RESOLVED
+      signature.py            decl/sorry/axiom scan + preservation
+      coords.py               UTF-16 ↔ code-point
+      diff_summary.py         difflib + decls + error_delta
+      outcome.py              Outcome enum + classifier
+      env.py                  env fingerprint
+      state.py                IterationState, History, Status,
+                              FailureReason, WarningReason
+      pause.py                interactive pause with (c/r/n/a/q/Q/s/d/h/g/b)
+      cost.py                 token → USD + retry inflation
+      tests/
+        fixtures/
+        test_*.py
+
+
+PUBLIC API / CLI
+----------------
+
+Programmatic:
+
+  from refine.controller import refine
+  history = refine(
+      project_root              = "/path/to/lake-project",
+      file_relpath              = "MyModule/Foo.lean",
+      goal                      = "Prove sqrt 2 is irrational",
+      mode                      = "policy",
+      model                     = "sonnet",
+      max_iters                 = 8,
+      lean_timeout_seconds      = 30,
+      max_cost_usd              = 1.00,
+      max_changed_lines         = 30,
+      max_changed_decls         = 2,
+      allow_signature_changes   = False,
+      allow_sorry               = False,
+      allow_axiom               = False,
+      allow_decl_removal        = False,
+      keep_raw_llm_io           = False,
+  )
+
+CLI:
+
+  uv run --with anthropic --with python-dotenv --with leanclient \
+         --python 3.12 -m refine \
+         --project-root examples/scratch \
+         --file Scratch/Basic.lean \
+         --goal "Make the file compile" \
+         --mode policy --model sonnet --max-iters 8 \
+         --lean-timeout 30 --max-cost-usd 1.00 \
+         --max-changed-lines 30 --max-changed-decls 2
+
+Exit codes:
+   0  success
+   1  paused → quit
+   2  max-iters, no success
+   3  LLM_ERROR after retry
+   4  APPLY_ERROR after retry
+   5  POLICY_VIOLATION (hard)
+   6  TIMEOUT_LEAN
+   7  LOOP_DETECTED, accepted exit
+   8  BUDGET_EXCEEDED
+
+
+BUILD ORDER
+-----------
+
+  1.  coords.py        UTF-16 ↔ code-point, table-driven tests
+  2.  schema.py        Pydantic models (ScopeItem included)
+  3.  edits.py         replace_range apply, ordering, bounds
+  4.  fingerprint.py   normalize + sha256 (message+decl+goal),
+                       fixture-driven tests
+  5.  state.py         IterationState, History, Status,
+                       FailureReason, WarningReason, GoalStatus
+  6.  outcome.py       Outcome enum + classifier
+  7.  goal_status.py   primary-goal heuristic
+  8.  diff_summary.py  difflib + decls + error_delta
+  9.  cost.py          token → USD + retry inflation
+  10. env.py           env fingerprint
+  11. artifact_store.py snapshots + history.jsonl + events.jsonl
+  12. evaluator.py     leanforge subprocess + timeout + classify
+  13. signature.py     decl + sorry/axiom + preservation (subtle
+                       Lean parsing — do it late)
+  14. prompt_builder.py system + user + prefill + versioning +
+                       FOCUS markers
+  15. pause.py         interactive prompt (c/r/n/a/q/s/d/h/g/b)
+  16. controller.py    main loop, mode dispatch, 3-strike loop
+                       detection, soft/hard policy
+  17. __main__.py      CLI
+  18. smoke test       against examples/scratch on the existing
+                       type error in mode=auto, max_iters=3,
+                       max_cost_usd=0.10
+
+
+WHAT THIS IS NOT
+----------------
+
+  - Semantic equivalence is NOT guaranteed by signature
+    preservation. A determined LLM can weaken a theorem via
+    redefinition or import shadowing. Text-level tampering only.
+  - Imports change semantics globally (open scoped, attribute
+    [simp]). Not detected in v1.
+  - No multi-file editing in v1.
+  - No streaming UI.
+  - No automatic git commit.
+  - No parallel candidate generation in v1.
+  - No alternative LLM providers (ask_llm gates them).
+  - No AST-aware edit validation in v1.
+  - No real declaration slicing in v1 — FOCUS markers in the full
+    file are a cheap stand-in.
+  - Repair-vs-generation temperature split deferred to v1.5.
+
+
+RESOLVED QUESTIONS
+------------------
+
+From revision 1:
+  Q1: generation is a SEPARATE mode (no stub theorem)
+  Q2: one corrective retry
+  Q3: cost guard in v1
+
+From revision 2 review:
+  Q4: semantic equivalence is v2; documented limitation
+  Q5: `axiom` is top-level decl, not body
+  Q6: tuple state_hash (file + diagnostics) for loop detection
+  Q7: fingerprint = message + enclosing_decl (range removed)
+  Q8: preserved_signatures removed; intended_scope replaces
+  Q9: prompt version stored
+  Q10: environment fingerprint stored
+  Q11: raw + canonicalized diagnostics both stored
+  Q12: separate events.jsonl from history.jsonl
+
+From revision 3 review:
+  Q13: intended_scope is ScopeItem(name, range?), advisory; system
+       computes truth from edits
+  Q14: loop detection is 3-strike, not 1-shot
+  Q15: fingerprint adds normalized goal/termGoal
+  Q16: signature drift downgraded to SOFT warning; HARD reserved
+       for sorry / axiom / decl removal
+  Q17: cost includes retry inflation (15% per retry)
+  Q18: diff_summary carries error_delta in one place
+  Q19: FOCUS markers in prompted file content (cheap context
+       narrowing without architecture change)
+  Q20: goal_status heuristic per iteration; modifies pause policy
+  Q21: pause adds (n) nudge for strategy switching
+  Q22: WarningReason enum alongside FailureReason; soft vs hard
+
+From revision 4 review (rev 4.1 fixes):
+  Q23: Post-Pydantic semantic validation (well-formed ranges,
+       valid diagnostic_ids, intended_scope decls must exist)
+  Q24: Sorry/admit detection uses leanforge's "declaration uses
+       'sorry'" warning, not string scanning
+  Q25: Recent-failures memo is structured records, not strings
+  Q26: (q) quit defaults to non-destructive; (Q) reset is the
+       explicit rollback with confirmation
+  Q27: Raw LLM I/O snapshots default ON in v1 (replay claim
+       requires the artifacts to actually exist)
+  Q28: Honest cost-profile note in COST GUARD with explicit
+       trigger to promote declaration slicing to v1.1 if first
+       real runs hit >$0.05/iter
+
+
+ARCHITECTURE DISCIPLINE NOTE
+----------------------------
+
+Rev 4 is the implementation target. No more spec revisions until
+v1 has been run end-to-end on real Lean files and we have
+empirical data on:
+
+  - Which failure modes actually dominate
+  - Whether the goal-status heuristic correctly modulates pauses
+  - Whether 3-strike loop detection is tight enough (or too loose)
+  - Whether the FOCUS-marker approach materially helps before we
+    invest in real declaration slicing
+  - Whether SIG_CHANGED-as-soft creates real over-acceptance
+  - How often the LLM's intended_scope is wildly wrong vs roughly
+    right
+  - What the actual cost shape is per iteration (sonnet vs opus)
+  - Whether the prompt's recent-failures memo measurably improves
+    convergence
+
+These questions cannot be answered by more design. They require
+real runs. After 20-50 iterations on real files, rev 5 (if needed)
+will be data-driven instead of speculative.
+
+Until then: implement what's in v1 SCOPE LOCK. Anything else goes
+into a TODO and ships in v1.5 or v2.
