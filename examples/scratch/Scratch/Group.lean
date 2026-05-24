@@ -684,10 +684,6 @@ theorem kernel_is_normal {G H : Type}
 
 
 
-/-  PHASED RUN GUARD: Stages 7-9 are temporarily block-commented so the
-    refine loop only sees the 11 sorries in Stages 5-6 and SUCCESS is
-    reachable. Un-comment one stage at a time in subsequent runs.
-
 -- ─────────────────────────────────────────────────────────────────────
 -- Stage 7 — Quotient group construction
 -- Built on Lean's core `Quot` type. Renamed `MyQuotient` to avoid the
@@ -705,54 +701,134 @@ def quotient_rel {G : Type}
 
 -- Multiplication on the quotient: [a] * [b] = [a · b]. Well-defined
 -- precisely when H is normal.
+theorem quotient_mul_well_defined {G : Type}
+    (Γ : MyGroup G) (H : MySubgroup Γ)
+    (hN : normal_subgroup Γ H)
+    (a a' b b' : G)
+    (ha : same_left_coset Γ H a a') (hb : same_left_coset Γ H b b') :
+    same_left_coset Γ H (Γ.op a b) (Γ.op a' b'):= by
+  simp only [same_left_coset] at *
+  rw [inv_op]
+  have hconj : H.carrier (Γ.op (Γ.op (Γ.inv b) (Γ.op (Γ.inv a) a')) b) := by
+    have := hN (Γ.inv b) _ ha
+    rwa [inv_inv] at this
+  have key : Γ.op (Γ.op (Γ.inv b) (Γ.inv a)) (Γ.op a' b') =
+             Γ.op (Γ.op (Γ.op (Γ.inv b) (Γ.op (Γ.inv a) a')) b) (Γ.op (Γ.inv b) b') := by
+    rw [Γ.assoc (Γ.inv b) (Γ.inv a) (Γ.op a' b')]
+    rw [← Γ.assoc (Γ.inv a) a' b']
+    rw [← Γ.assoc (Γ.inv b) (Γ.op (Γ.inv a) a') b']
+    rw [Γ.assoc (Γ.op (Γ.inv b) (Γ.op (Γ.inv a) a')) b (Γ.op (Γ.inv b) b')]
+    congr 1
+    rw [← Γ.assoc b (Γ.inv b) b', Γ.inv_right, Γ.e_left]
+  rw [key]
+  exact H.op_closed hconj hb
+
+
+
+
+
+
+
+
+
+
+
+
 def quotient_mul {G : Type}
     (Γ : MyGroup G)
     (H : MySubgroup Γ)
     (hN : normal_subgroup Γ H) :
     MyQuotient G (quotient_rel Γ H) →
     MyQuotient G (quotient_rel Γ H) →
-    MyQuotient G (quotient_rel Γ H) := by
-  sorry
-
-
--- Well-definedness of quotient multiplication: if a ~ a' and b ~ b',
--- then a·b ~ a'·b'. Requires H normal.
-theorem quotient_mul_well_defined {G : Type}
-    (Γ : MyGroup G) (H : MySubgroup Γ)
-    (hN : normal_subgroup Γ H)
-    (a a' b b' : G)
-    (ha : same_left_coset Γ H a a')
-    (hb : same_left_coset Γ H b b') :
-    same_left_coset Γ H (Γ.op a b) (Γ.op a' b') := by
-  sorry
-
-
--- Identity of the quotient group: the class of e.
-def quotient_identity {G : Type}
-    (Γ : MyGroup G)
-    (H : MySubgroup Γ) :
     MyQuotient G (quotient_rel Γ H) :=
-  Quot.mk _ Γ.e
+    Quot.lift
+    (fun a => Quot.lift
+      (fun b => Quot.mk (quotient_rel Γ H) (Γ.op a b))
+      (fun b b' hb => Quot.sound (quotient_mul_well_defined Γ H hN a a b b'
+        (same_left_coset_refl Γ H a) hb)))
+    (fun a a' ha => by
+      funext qb
+      refine Quot.inductionOn qb (fun b => ?_)
+      exact Quot.sound (quotient_mul_well_defined Γ H hN a a' b b ha
+        (same_left_coset_refl Γ H b)))
 
 
--- Inverse in the quotient: [a] ↦ [a⁻¹].
+
+
 def quotient_inverse {G : Type}
     (Γ : MyGroup G)
     (H : MySubgroup Γ)
     (hN : normal_subgroup Γ H) :
     MyQuotient G (quotient_rel Γ H) →
-    MyQuotient G (quotient_rel Γ H) := by
-  sorry
+    MyQuotient G (quotient_rel Γ H) :=
+  Quot.lift
+    (fun a => Quot.mk (quotient_rel Γ H) (Γ.inv a))
+    (fun a a' ha => by
+      apply Quot.sound
+      simp only [quotient_rel, same_left_coset] at *
+      have h1 : H.carrier (Γ.inv (Γ.op (Γ.inv a) a')) := H.inv_closed ha
+      rw [inv_op, inv_inv] at h1
+      have h2 := hN a' _ h1
+      rw [← Γ.assoc a' (Γ.inv a') a, Γ.inv_right, Γ.e_left] at h2
+      rw [inv_inv]
+      exact h2)
 
 
--- The quotient G/H is itself a group when H is normal.
+
+def quotient_identity {G : Type}
+    (Γ : MyGroup G)
+    (H : MySubgroup Γ) :
+    MyQuotient G (quotient_rel Γ H) :=
+  Quot.mk (quotient_rel Γ H) Γ.e
+
+
 def quotient_is_group {G : Type}
     (Γ : MyGroup G)
     (H : MySubgroup Γ)
     (hN : normal_subgroup Γ H) :
-    MyGroup (MyQuotient G (quotient_rel Γ H)) := by
-  sorry
+    MyGroup (MyQuotient G (quotient_rel Γ H)) :=
+  { op := quotient_mul Γ H hN,
+    e := quotient_identity Γ H,
+    inv := quotient_inverse Γ H hN,
+    assoc := by
+      intro qa qb qc
+      refine Quot.inductionOn qa (fun a => ?_)
+      refine Quot.inductionOn qb (fun b => ?_)
+      refine Quot.inductionOn qc (fun c => ?_)
+      show Quot.mk (quotient_rel Γ H) (Γ.op (Γ.op a b) c) =
+           Quot.mk (quotient_rel Γ H) (Γ.op a (Γ.op b c))
+      rw [Γ.assoc],
+    e_left := by
+      intro qa
+      refine Quot.inductionOn qa (fun a => ?_)
+      show Quot.mk (quotient_rel Γ H) (Γ.op Γ.e a) = Quot.mk (quotient_rel Γ H) a
+      rw [Γ.e_left],
+    e_right := by
+      intro qa
+      refine Quot.inductionOn qa (fun a => ?_)
+      show Quot.mk (quotient_rel Γ H) (Γ.op a Γ.e) = Quot.mk (quotient_rel Γ H) a
+      rw [Γ.e_right],
+    inv_left := by
+      intro qa
+      refine Quot.inductionOn qa (fun a => ?_)
+      apply Quot.sound
+      simp only [quotient_rel, same_left_coset]
+      rw [Γ.inv_left, Γ.inv_left]
+      exact H.e_mem,
+    inv_right := by
+      intro qa
+      refine Quot.inductionOn qa (fun a => ?_)
+      apply Quot.sound
+      simp only [quotient_rel, same_left_coset]
+      rw [Γ.inv_right, Γ.inv_left]
+      exact H.e_mem }
 
+
+
+
+/-  PHASED RUN GUARD: Stages 8-9 are temporarily block-commented so the
+    refine loop only sees the 5 sorries in Stage 7 and SUCCESS is
+    reachable. Un-comment one stage at a time in subsequent runs.
 
 -- ─────────────────────────────────────────────────────────────────────
 -- Stage 8 — Isomorphisms and the first isomorphism theorem

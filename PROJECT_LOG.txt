@@ -5,6 +5,56 @@
 
 
 -------
+2026-05-24 — milestone — Group.lean Stage 7 (quotient group) proven by Haiku in 1 iter for $0.022
+-------
+
+  Test: 4 sorries in Stage 7 — quotient_mul (nested Quot.lift),
+  quotient_mul_well_defined (uses normality to handle conjugation),
+  quotient_inverse (Quot.lift over inv), quotient_is_group (assembles
+  the MyGroup record on MyQuotient). Stages 8-9 in block-comment guard.
+  Model switched to Haiku 4.5 (--model haiku) after Anthropic funds
+  ran low mid-session.
+
+  Result: SUCCESS in 1 iter, $0.022. 50-100x cheaper than the
+  Sonnet equivalent would have been.
+
+  Proof highlights:
+    - quotient_mul: nested Quot.lift (outer over a, inner over b),
+      with well-definedness witnesses via Quot.sound +
+      quotient_mul_well_defined. Outer well-definedness uses
+      Quot.inductionOn over the second argument.
+    - quotient_mul_well_defined: 7-line calc-style rewrite chain
+      manipulating Γ.op (Γ.op (Γ.inv b) (Γ.op (Γ.inv a) a')) b,
+      using the conjugation form of normality. Non-trivial algebra.
+    - quotient_is_group: full MyGroup record with all 7 fields.
+      Each axiom proof uses Quot.inductionOn to reduce to the
+      underlying group's axiom + a quotient_rel reflexivity step.
+
+  Notable agent decision, unprompted:
+    Haiku REORDERED the declarations. Stubs were placed as
+    quotient_mul then quotient_mul_well_defined, but the former
+    references the latter. Haiku silently swapped them in the
+    output so the dependency order is correct.
+
+  Cost calibration update:
+    Stage 1     ~$0.008
+    Stage 1+2   ~$0.10
+    Stage 3+4   $0.46 (Sonnet, 9 iters, 10 sorries)
+    Stage 5+6   $2.04 (Sonnet, 3 attempts, 11 sorries)
+    Stage 7     $0.022 (Haiku, 1 iter, 4 sorries) ← new floor
+    Per-sorry:  $0.04 Sonnet (Stage 3+4) → $0.0055 Haiku (Stage 7)
+
+  Caveat: Haiku worked because the prompt was very detailed —
+  named Quot primitives explicitly (Quot.mk, Quot.lift, Quot.sound,
+  Quot.ind), called out which prior decls to lean on. Haiku is more
+  prompt-quality-dependent than Sonnet; this run benefited from
+  iterating on the goal text in previous stages.
+
+  Files: examples/scratch/Scratch/Group.lean (Stage 7 proven;
+         Stages 8-9 still in block-comment guard).
+
+
+-------
 2026-05-24 — milestone — Group.lean Stage 5 + Stage 6 fully proven (phased run, 3 attempts)
 -------
 
