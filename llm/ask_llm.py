@@ -171,7 +171,7 @@ def ask_llm(
     model: str = DEFAULT_MODEL,
     mode: str = "raw",
     temperature: float | None = None,
-    max_tokens: int = 2048,
+    max_tokens: int = 8192,
     timeout_s: float = 120.0,
     use_cache: bool = True,
     cache_prompt: bool = True,

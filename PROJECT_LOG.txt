@@ -5,6 +5,92 @@
 
 
 -------
+2026-05-24 — milestone — Group.lean Stage 3 + Stage 4 fully proven; 10 sorries in 9 iters
+-------
+
+  Test: appended Stage 3 (homomorphism toolkit — hom_map_e,
+  hom_map_inv, hom_comp, hom_id, kernel_subgroup,
+  subgroup_generated_by, plus concrete defs hom_kernel / hom_image /
+  left_coset / normal_subgroup) and Stage 4 (subgroup_criterion,
+  image_subgroup, hom_injective_iff_kernel_trivial, hom_comp_assoc)
+  to Group.lean. 10 fresh sorries in a ~280-line file with two new
+  section dividers. Goal: complete the file end-to-end on one
+  refine() invocation.
+
+  Result: SUCCESS in 9 iterations, $0.4559 total (well under the
+  $2.50 cap).
+    iter 1: single-shot replacement of all 10 sorries.
+            resolved=10, new=3, cost=$0.144 (highest single-iter
+            cost ever; corresponds to Sonnet's "fix everything in
+            one big edit" strategy).
+    iters 2-7: clean up 3 new errors plus apply_edits coord
+               failures and parse_error churn. ~$0.04 per iter.
+    iter 8: SUCCESS.
+
+  Three agent decisions worth preserving, none prompted:
+    - subgroup_generated_by: chose the universal-property phrasing
+      `fun x => ∀ H, (∀ s, S s → H.carrier s) → H.carrier x`
+      (intersection of all containing subgroups) over an inductive
+      definition. Slicker and easier to use downstream.
+    - hom_comp_assoc: closed with `rfl`, only possible because
+      hom_comp was defined as a plain anonymous-constructor record
+      (`{ toFun := …, map_op := … }`) instead of `by exact {…}`.
+      That preserves definitional reduction.
+    - subgroup_criterion: linearized the closure→identity→
+      inverse-closure→op-closure dependency chain as a three-step
+      `have` chain using `closed witness witness witness_mem
+      witness_mem` and `inv_inv`.
+
+  Two new bug classes surfaced — worth tracking:
+
+    Bug A — apply_edits coordinate failures after big restructuring.
+      iters 2 and 4 died with "edit end character N exceeds line
+      Y's UTF-16 length". After iter 1's massive 10-sorry rewrite,
+      file line numbers shifted; LLM in subsequent iters referenced
+      regions at stale coordinates (in one case past EOF). v1.0.4
+      soft_warning recovery worked — the failures were carried
+      into the next iter's prompt — but cost ~$0.10 across two
+      wasted iterations.
+
+    Bug B — parse_error churn.
+      iters 3, 6, 7 exhibited a 1-resolved-1-new pattern: LLM
+      fixes one syntax error and creates a different one elsewhere.
+      Three iterations of slow forward progress. Cost ~$0.12.
+
+  Files: examples/scratch/Scratch/Group.lean (Stage 3 + Stage 4
+         landed and proven).
+
+
+-------
+2026-05-24 — v1.0.7 — --max-tokens CLI flag; ask_llm default 2048 → 8192
+-------
+
+  Test: first attempt at the Stage 3 + Stage 4 run (10 sorries)
+  died at iter 1 with: "no JSON object in response: Unterminated
+  string starting at line 24 column 846".
+
+  Bug 11 — LLM response truncated at max_tokens cap.
+    The default 2048 from LLM.spec.txt was sized when refine's
+    typical response was a 1-3 line edit. With 10 sorries to fix
+    in a 280-line file, Sonnet emitted ~1400 chars of prose
+    preamble plus full-file re-quoting inside the `fixes` JSON
+    and ran out of output budget mid-string. The JSON extractor
+    saw `{` then choked on the unterminated string.
+    Fix: bumped ask_llm's default to 8192 and added a passthrough
+    `max_tokens` parameter to refine() and a `--max-tokens` flag
+    to the refine CLI so users can tune further for huge files.
+    Re-ran the same goal at default 8192 and it succeeded in 9
+    iterations.
+
+  Files: llm/ask_llm.py (default bump), refine/controller.py
+         (parameter plumbed through refine() →
+         _bootstrap_starter / _run_one_iteration → both ask_llm
+         calls), refine/__main__.py (--max-tokens flag).
+
+  QA: 340 tests pass; ruff + mypy --strict clean.
+
+
+-------
 2026-05-23 — milestone — Group.lean Stage-1 fully proven; v1.0.4–v1.0.6 jointly validated
 -------
 

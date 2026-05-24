@@ -54,6 +54,14 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--max-iters", type=int, default=8)
     parser.add_argument("--lean-timeout", type=float, default=30.0)
     parser.add_argument("--max-cost-usd", type=float, default=1.00)
+    parser.add_argument(
+        "--max-tokens",
+        type=int,
+        default=8192,
+        help="Per-call cap on LLM response tokens. Larger files / "
+        "multi-fix responses need more headroom; truncation produces "
+        "unterminated-JSON errors.",
+    )
     parser.add_argument("--no-keep-raw-llm-io", action="store_true")
     parser.add_argument("--quiet", action="store_true", help="Suppress info logs.")
     return parser.parse_args()
@@ -75,6 +83,7 @@ def main() -> int:
         max_iters=args.max_iters,
         lean_timeout_seconds=args.lean_timeout,
         max_cost_usd=args.max_cost_usd,
+        max_tokens=args.max_tokens,
         keep_raw_llm_io=not args.no_keep_raw_llm_io,
     )
     final = history.final_status or Status.MAX_ITERS

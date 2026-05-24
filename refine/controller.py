@@ -70,6 +70,7 @@ def refine(
     max_iters: int = 8,
     lean_timeout_seconds: float = 30,
     max_cost_usd: float = 1.00,
+    max_tokens: int = 8192,
     keep_raw_llm_io: bool = True,
 ) -> History:
     """Drive the refine loop end-to-end. Returns the populated History."""
@@ -83,6 +84,7 @@ def refine(
         store=store,
         goal=goal,
         model=model,
+        max_tokens=max_tokens,
         keep_raw_llm_io=keep_raw_llm_io,
     )
 
@@ -131,6 +133,7 @@ def refine(
                 cumulative_output=cumulative_output,
                 cumulative_cost=cumulative_cost,
                 max_cost_usd=max_cost_usd,
+                max_tokens=max_tokens,
                 original_sigs=original_sigs,
                 original_axioms=original_axioms,
                 original_sorries=original_sorries,
@@ -168,6 +171,7 @@ def _bootstrap_starter(
     store: ArtifactStore,
     goal: str,
     model: str,
+    max_tokens: int,
     keep_raw_llm_io: bool,
 ) -> str:
     """Return the starter content. Reads the user's file when present and
@@ -184,6 +188,7 @@ def _bootstrap_starter(
         model=model,
         system_override=system,
         prefill=prefill,
+        max_tokens=max_tokens,
     )
     refine_response = _parse_response_or_fail(response.text)
     if not refine_response.fixes or not refine_response.fixes[0].edits:
@@ -271,6 +276,7 @@ def _run_one_iteration(
     cumulative_output: int,
     cumulative_cost: float,
     max_cost_usd: float,
+    max_tokens: int,
     original_sigs: dict[str, str],
     original_axioms: set[str],
     original_sorries: set[str],
@@ -300,6 +306,7 @@ def _run_one_iteration(
         model=model,
         system_override=system,
         prefill=prefill,
+        max_tokens=max_tokens,
     )
 
     if keep_raw_llm_io:
