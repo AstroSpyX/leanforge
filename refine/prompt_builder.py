@@ -56,7 +56,7 @@ SCHEMA:
   "confidence":         number,             // 0.0 .. 1.0
   "intended_scope":     [ScopeItem],
   "fixes":              [Fix],
-  "remaining_blockers": [string]            // diagnostic IDs you cannot fix
+  "remaining_blockers": [string]            // diagnostic IDs as strings, e.g. ["2","5"]
 }}
 
 ScopeItem:
@@ -107,7 +107,7 @@ YOU MAY:
 - repair namespace references
 - use existing Mathlib lemmas
 
-IF YOU CANNOT FIX A DIAGNOSTIC, list its `id` in `remaining_blockers`.
+IF YOU CANNOT FIX A DIAGNOSTIC, list its id as STRING (e.g. "2") in remaining_blockers.
 """
 
 

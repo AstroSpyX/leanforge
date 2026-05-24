@@ -410,9 +410,436 @@ theorem hom_comp_assoc {A B C D : Type}
 
 
 -- ─────────────────────────────────────────────────────────────────────
--- Stage 5 (future) — Cosets as equivalence, Lagrange, quotients
--- Not stubbed yet: cosets-as-partition requires an equivalence-relation
--- abstraction (Setoid / Quotient or a hand-rolled equivalent), and
--- Lagrange's theorem needs finite-cardinality machinery. Next agenda
--- after Stage 4 lands.
+-- Stage 5 — Equivalence relations and coset equivalence
+-- The relation-on-G abstraction that cosets-as-partition needs.
 -- ─────────────────────────────────────────────────────────────────────
+
+def Relation (α : Type) := α → α → Prop
+
+def Reflexive {α : Type} (R : Relation α) : Prop := ∀ x : α, R x x
+def Symmetric {α : Type} (R : Relation α) : Prop := ∀ x y : α, R x y → R y x
+def Transitive {α : Type} (R : Relation α) : Prop :=
+  ∀ x y z : α, R x y → R y z → R x z
+
+
+-- An equivalence relation: reflexive, symmetric, transitive.
+structure MyEquivalence {α : Type} (R : Relation α) : Prop where
+  refl : Reflexive R
+  symm : Symmetric R
+  trans : Transitive R
+
+
+-- a ~ b iff a⁻¹ · b ∈ H. The "same left coset" equivalence on G.
+def same_left_coset {G : Type}
+    (Γ : MyGroup G)
+    (H : MySubgroup Γ) : Relation G :=
+  fun a b => H.carrier (Γ.op (Γ.inv a) b)
+
+
+theorem same_left_coset_refl {G : Type}
+    (Γ : MyGroup G) (H : MySubgroup Γ) :
+    Reflexive (same_left_coset Γ H) := by
+  intro x
+  simp only [same_left_coset]
+  rw [Γ.inv_left]
+  exact H.e_mem
+
+
+theorem same_left_coset_symm {G : Type}
+    (Γ : MyGroup G) (H : MySubgroup Γ) :
+    Symmetric (same_left_coset Γ H) := by
+  intro x y hxy
+  simp only [same_left_coset] at *
+  have h1 : H.carrier (Γ.inv (Γ.op (Γ.inv x) y)) := H.inv_closed hxy
+  rw [inv_op, inv_inv] at h1
+  exact h1
+
+
+theorem same_left_coset_trans {G : Type}
+    (Γ : MyGroup G) (H : MySubgroup Γ) :
+    Transitive (same_left_coset Γ H) := by
+  intro x y z hxy hyz
+  simp only [same_left_coset] at *
+  have h1 : H.carrier (Γ.op (Γ.op (Γ.inv x) y) (Γ.op (Γ.inv y) z)) :=
+    H.op_closed hxy hyz
+  rw [Γ.assoc, ← Γ.assoc y, Γ.inv_right, Γ.e_left] at h1
+  exact h1
+
+
+
+def same_left_coset_equiv {G : Type}
+    (Γ : MyGroup G) (H : MySubgroup Γ) :
+    MyEquivalence (same_left_coset Γ H) :=
+  ⟨same_left_coset_refl Γ H, same_left_coset_symm Γ H, same_left_coset_trans Γ H⟩
+
+
+-- a ~_r b iff a · b⁻¹ ∈ H. The mirror relation on the right.
+def same_right_coset {G : Type}
+    (Γ : MyGroup G)
+    (H : MySubgroup Γ) : Relation G :=
+  fun a b => H.carrier (Γ.op a (Γ.inv b))
+
+
+def same_right_coset_equiv {G : Type}
+    (Γ : MyGroup G) (H : MySubgroup Γ) :
+    MyEquivalence (same_right_coset Γ H) := by
+  constructor
+  · intro x
+    simp only [same_right_coset]
+    rw [Γ.inv_right]
+    exact H.e_mem
+  · intro x y hxy
+    simp only [same_right_coset] at *
+    have h1 : H.carrier (Γ.inv (Γ.op x (Γ.inv y))) := H.inv_closed hxy
+    rw [inv_op, inv_inv] at h1
+    exact h1
+  · intro x y z hxy hyz
+    simp only [same_right_coset] at *
+    have h1 : H.carrier (Γ.op (Γ.op x (Γ.inv y)) (Γ.op y (Γ.inv z))) :=
+      H.op_closed hxy hyz
+    rw [Γ.assoc, ← Γ.assoc (Γ.inv y), Γ.inv_left, Γ.e_left] at h1
+    exact h1
+
+
+-- ─────────────────────────────────────────────────────────────────────
+-- Stage 6 — Right cosets, partition, normality characterizations
+-- Cosets-as-partition and the three classical "H is normal iff …" facts.
+-- ─────────────────────────────────────────────────────────────────────
+
+-- Right coset of H by a: { h · a | h ∈ H }.
+def right_coset {G : Type}
+    {Γ : MyGroup G}
+    (H : MySubgroup Γ)
+    (a : G) : Set G :=
+  fun x => ∃ h : G, H.carrier h ∧ x = Γ.op h a
+
+
+-- Two left cosets are equal iff their representatives are in the same coset.
+theorem coset_eq_iff {G : Type}
+    (Γ : MyGroup G) (H : MySubgroup Γ) (a b : G) :
+    left_coset H a = left_coset H b ↔ same_left_coset Γ H a b := by
+  constructor
+  · intro heq
+    simp only [same_left_coset]
+    have : left_coset H a a := ⟨Γ.e, H.e_mem, (Γ.e_right a).symm⟩
+    rw [heq] at this
+    obtain ⟨h, hh, hah⟩ := this
+    -- hah : a = Γ.op b h, goal: H.carrier (Γ.op (Γ.inv a) b)
+    rw [hah, inv_op]
+    -- now goal: H.carrier (Γ.op (Γ.op (Γ.inv h) (Γ.inv b)) b)
+    have : Γ.op (Γ.op (Γ.inv h) (Γ.inv b)) b = Γ.inv h := by
+      rw [Γ.assoc, Γ.inv_left, Γ.e_right]
+    rw [this]
+    exact H.inv_closed hh
+  · intro hab
+    simp only [same_left_coset] at hab
+    funext x
+    apply propext
+    constructor
+    · rintro ⟨h, hh, hx⟩
+      refine ⟨Γ.op (Γ.op (Γ.inv b) a) h, H.op_closed ?_ hh, ?_⟩
+      · have : H.carrier (Γ.inv (Γ.op (Γ.inv a) b)) := H.inv_closed hab
+        rw [inv_op, inv_inv] at this
+        exact this
+      · rw [hx]
+        rw [← Γ.assoc b (Γ.op (Γ.inv b) a) h]
+        rw [← Γ.assoc b (Γ.inv b) a]
+        rw [Γ.inv_right, Γ.e_left]
+    · rintro ⟨h, hh, hx⟩
+      refine ⟨Γ.op (Γ.op (Γ.inv a) b) h, H.op_closed hab hh, ?_⟩
+      rw [hx]
+      rw [← Γ.assoc a (Γ.op (Γ.inv a) b) h]
+      rw [← Γ.assoc a (Γ.inv a) b]
+      rw [Γ.inv_right, Γ.e_left]
+
+
+
+
+
+-- Any two left cosets are either equal or disjoint.
+theorem left_cosets_partition {G : Type}
+    (Γ : MyGroup G) (H : MySubgroup Γ) (a b : G) :
+    left_coset H a = left_coset H b ∨
+    (∀ x : G, ¬ (left_coset H a x ∧ left_coset H b x)) := by
+  by_cases h : same_left_coset Γ H a b
+  · left; exact (coset_eq_iff Γ H a b).mpr h
+  · right
+    intro x ⟨hxa, hxb⟩
+    apply h
+    have heqa : left_coset H a = left_coset H x := by
+      apply (coset_eq_iff Γ H a x).mpr
+      simp only [same_left_coset]
+      obtain ⟨h1, hh1, hx1⟩ := hxa
+      rw [hx1, ← Γ.assoc, Γ.inv_left, Γ.e_left]
+      exact hh1
+    have heqb : left_coset H b = left_coset H x := by
+      apply (coset_eq_iff Γ H b x).mpr
+      simp only [same_left_coset]
+      obtain ⟨h2, hh2, hx2⟩ := hxb
+      rw [hx2, ← Γ.assoc, Γ.inv_left, Γ.e_left]
+      exact hh2
+    rw [← heqb] at heqa
+    exact (coset_eq_iff Γ H a b).mp heqa
+
+
+
+-- Any two right cosets are either equal or disjoint.
+theorem right_cosets_partition {G : Type}
+    (Γ : MyGroup G) (H : MySubgroup Γ) (a b : G) :
+    right_coset H a = right_coset H b ∨
+    (∀ x : G, ¬ (right_coset H a x ∧ right_coset H b x)) := by
+  by_cases h : same_right_coset Γ H a b
+  · left
+    funext x
+    apply propext
+    simp only [right_coset, same_right_coset] at *
+    constructor
+    · rintro ⟨k, hk, hx⟩
+      refine ⟨Γ.op k (Γ.op a (Γ.inv b)), H.op_closed hk h, ?_⟩
+      rw [hx, ← Γ.assoc k a, Γ.assoc (Γ.op k a)]
+      rw [show Γ.op (Γ.inv b) b = Γ.e from Γ.inv_left b, Γ.e_right]
+    · rintro ⟨k, hk, hx⟩
+      have hinv : H.carrier (Γ.inv (Γ.op a (Γ.inv b))) := H.inv_closed h
+      rw [inv_op, inv_inv] at hinv
+      refine ⟨Γ.op k (Γ.op b (Γ.inv a)), H.op_closed hk hinv, ?_⟩
+      rw [hx, ← Γ.assoc k b, Γ.assoc (Γ.op k b)]
+      rw [show Γ.op (Γ.inv a) a = Γ.e from Γ.inv_left a, Γ.e_right]
+  · right
+    intro x ⟨hxa, hxb⟩
+    apply h
+    simp only [right_coset] at hxa hxb
+    obtain ⟨k1, hk1, hx1⟩ := hxa
+    obtain ⟨k2, hk2, hx2⟩ := hxb
+    simp only [same_right_coset]
+    have heq12 : Γ.op k1 a = Γ.op k2 b := by rw [← hx1, ← hx2]
+    have hk : H.carrier (Γ.op (Γ.inv k1) k2) := H.op_closed (H.inv_closed hk1) hk2
+    have hval : Γ.op a (Γ.inv b) = Γ.op (Γ.inv k1) k2 := by
+      apply left_cancel Γ k1
+      rw [← Γ.assoc k1 a (Γ.inv b), heq12, Γ.assoc k2 b (Γ.inv b), Γ.inv_right, Γ.e_right,
+          ← Γ.assoc k1 (Γ.inv k1) k2, Γ.inv_right, Γ.e_left]
+    rw [hval]
+    exact hk
+
+
+
+
+
+
+-- H is normal iff every left coset equals the corresponding right coset.
+theorem normal_iff_cosets_equal {G : Type}
+    (Γ : MyGroup G) (H : MySubgroup Γ) :
+    normal_subgroup Γ H ↔ ∀ a : G, left_coset H a = right_coset H a := by
+  constructor
+  · intro hN a
+    funext x
+    apply propext
+    simp only [left_coset, right_coset]
+    constructor
+    · rintro ⟨h, hh, hx⟩
+      refine ⟨Γ.op (Γ.op a h) (Γ.inv a), hN a h hh, ?_⟩
+      rw [hx]
+      rw [Γ.assoc (Γ.op a h) (Γ.inv a) a, Γ.inv_left, Γ.e_right]
+    · rintro ⟨h, hh, hx⟩
+      have hh' : H.carrier (Γ.op (Γ.op (Γ.inv a) h) (Γ.inv (Γ.inv a))) := hN (Γ.inv a) h hh
+      rw [inv_inv] at hh'
+      have hh'' : H.carrier (Γ.op (Γ.inv a) (Γ.op h a)) := by
+        rw [← Γ.assoc]; exact hh'
+      refine ⟨Γ.op (Γ.inv a) (Γ.op h a), hh'', ?_⟩
+      rw [hx, ← Γ.assoc a (Γ.inv a) (Γ.op h a), Γ.inv_right, Γ.e_left]
+  · intro hcosets g h hh
+    have hmem2 : left_coset H g (Γ.op g h) := ⟨h, hh, rfl⟩
+    rw [hcosets g] at hmem2
+    obtain ⟨k2, hk2, hk2eq⟩ := hmem2
+    have hk2val : k2 = Γ.op (Γ.op g h) (Γ.inv g) := by
+      apply right_cancel Γ g
+      rw [← hk2eq, Γ.assoc (Γ.op g h) (Γ.inv g) g, Γ.inv_left, Γ.e_right]
+    rw [← hk2val]; exact hk2
+
+
+
+
+
+
+
+
+-- H is normal iff closed under conjugation by every g (g h g⁻¹ ∈ H).
+-- (This is the standard characterization, equivalent to the definition.)
+theorem normal_iff_conjugation {G : Type}
+    (Γ : MyGroup G) (H : MySubgroup Γ) :
+    normal_subgroup Γ H ↔
+    ∀ g h : G, H.carrier h → H.carrier (Γ.op (Γ.op g h) (Γ.inv g)) := by
+  simp only [normal_subgroup]
+
+
+-- The kernel of a homomorphism is a normal subgroup.
+theorem kernel_is_normal {G H : Type}
+    {ΓG : MyGroup G} {ΓH : MyGroup H}
+    (φ : MyHom ΓG ΓH) :
+    normal_subgroup ΓG (kernel_subgroup φ) := by
+  intro g h hh
+  simp only [kernel_subgroup, hom_kernel] at *
+  rw [φ.map_op, φ.map_op, hh, hom_map_inv ΓG ΓH φ]
+  rw [ΓH.e_right, ΓH.inv_right]
+
+
+
+
+/-  PHASED RUN GUARD: Stages 7-9 are temporarily block-commented so the
+    refine loop only sees the 11 sorries in Stages 5-6 and SUCCESS is
+    reachable. Un-comment one stage at a time in subsequent runs.
+
+-- ─────────────────────────────────────────────────────────────────────
+-- Stage 7 — Quotient group construction
+-- Built on Lean's core `Quot` type. Renamed `MyQuotient` to avoid the
+-- name clash with Lean core's `Quotient` (which requires a Setoid).
+-- ─────────────────────────────────────────────────────────────────────
+
+def MyQuotient (G : Type) (R : Relation G) := Quot R
+
+
+def quotient_rel {G : Type}
+    (Γ : MyGroup G)
+    (H : MySubgroup Γ) : Relation G :=
+  same_left_coset Γ H
+
+
+-- Multiplication on the quotient: [a] * [b] = [a · b]. Well-defined
+-- precisely when H is normal.
+def quotient_mul {G : Type}
+    (Γ : MyGroup G)
+    (H : MySubgroup Γ)
+    (hN : normal_subgroup Γ H) :
+    MyQuotient G (quotient_rel Γ H) →
+    MyQuotient G (quotient_rel Γ H) →
+    MyQuotient G (quotient_rel Γ H) := by
+  sorry
+
+
+-- Well-definedness of quotient multiplication: if a ~ a' and b ~ b',
+-- then a·b ~ a'·b'. Requires H normal.
+theorem quotient_mul_well_defined {G : Type}
+    (Γ : MyGroup G) (H : MySubgroup Γ)
+    (hN : normal_subgroup Γ H)
+    (a a' b b' : G)
+    (ha : same_left_coset Γ H a a')
+    (hb : same_left_coset Γ H b b') :
+    same_left_coset Γ H (Γ.op a b) (Γ.op a' b') := by
+  sorry
+
+
+-- Identity of the quotient group: the class of e.
+def quotient_identity {G : Type}
+    (Γ : MyGroup G)
+    (H : MySubgroup Γ) :
+    MyQuotient G (quotient_rel Γ H) :=
+  Quot.mk _ Γ.e
+
+
+-- Inverse in the quotient: [a] ↦ [a⁻¹].
+def quotient_inverse {G : Type}
+    (Γ : MyGroup G)
+    (H : MySubgroup Γ)
+    (hN : normal_subgroup Γ H) :
+    MyQuotient G (quotient_rel Γ H) →
+    MyQuotient G (quotient_rel Γ H) := by
+  sorry
+
+
+-- The quotient G/H is itself a group when H is normal.
+def quotient_is_group {G : Type}
+    (Γ : MyGroup G)
+    (H : MySubgroup Γ)
+    (hN : normal_subgroup Γ H) :
+    MyGroup (MyQuotient G (quotient_rel Γ H)) := by
+  sorry
+
+
+-- ─────────────────────────────────────────────────────────────────────
+-- Stage 8 — Isomorphisms and the first isomorphism theorem
+-- ─────────────────────────────────────────────────────────────────────
+
+-- A group isomorphism: a homomorphism with a two-sided inverse.
+structure MyIso {G H : Type}
+    (ΓG : MyGroup G)
+    (ΓH : MyGroup H) where
+  toFun : G → H
+  invFun : H → G
+  left_inv : ∀ x : G, invFun (toFun x) = x
+  right_inv : ∀ y : H, toFun (invFun y) = y
+  map_op : ∀ a b : G, toFun (ΓG.op a b) = ΓH.op (toFun a) (toFun b)
+
+
+-- The induced map G/ker(φ) → H sending [g] ↦ φ(g).
+def induced_map {G H : Type}
+    {ΓG : MyGroup G} {ΓH : MyGroup H}
+    (φ : MyHom ΓG ΓH)
+    (hN : normal_subgroup ΓG (kernel_subgroup φ)) :
+    MyQuotient G (quotient_rel ΓG (kernel_subgroup φ)) → H := by
+  sorry
+
+
+-- The induced map commutes with the quotient projection: φ factors
+-- through G/ker(φ).
+theorem hom_factor_through_kernel {G H : Type}
+    {ΓG : MyGroup G} {ΓH : MyGroup H}
+    (φ : MyHom ΓG ΓH)
+    (hN : normal_subgroup ΓG (kernel_subgroup φ))
+    (g : G) :
+    induced_map φ hN (Quot.mk _ g) = φ.toFun g := by
+  sorry
+
+
+-- First isomorphism theorem (weak form): the induced map is injective
+-- onto its image (which equals image(φ)). The full "MyIso between
+-- subtype-of-image and quotient-as-MyGroup" formulation requires
+-- explicit MyGroup structures on subtypes, which we have not built.
+theorem first_isomorphism_theorem {G H : Type}
+    (ΓG : MyGroup G) (ΓH : MyGroup H)
+    (φ : MyHom ΓG ΓH)
+    (hN : normal_subgroup ΓG (kernel_subgroup φ)) :
+    (∀ q1 q2 : MyQuotient G (quotient_rel ΓG (kernel_subgroup φ)),
+        induced_map φ hN q1 = induced_map φ hN q2 → q1 = q2) ∧
+    (∀ y : H, hom_image φ y →
+        ∃ q : MyQuotient G (quotient_rel ΓG (kernel_subgroup φ)),
+          induced_map φ hN q = y) := by
+  sorry
+
+
+-- ─────────────────────────────────────────────────────────────────────
+-- Stage 9 — Second and third isomorphism theorems
+-- These require AB (subgroup product) and lattice-of-subgroups
+-- machinery that we have not built; the statements below are
+-- aspirational placeholders and may not be tractable in our
+-- self-contained setting without more scaffolding.
+-- ─────────────────────────────────────────────────────────────────────
+
+-- Subgroup product as a Set (not necessarily itself a subgroup unless
+-- one of A, B is normal). { a · b | a ∈ A, b ∈ B }.
+def subgroup_product {G : Type}
+    {Γ : MyGroup G}
+    (A B : MySubgroup Γ) : Set G :=
+  fun x => ∃ a b : G, A.carrier a ∧ B.carrier b ∧ x = Γ.op a b
+
+
+-- Second isomorphism theorem (aspirational): if A is a subgroup and B
+-- is normal in G, then A ∩ B is normal in A and A/(A ∩ B) ≅ (AB)/B.
+-- Statable here only as a property of subgroup_intersection.
+theorem second_isomorphism_theorem {G : Type}
+    (Γ : MyGroup G) (A B : MySubgroup Γ)
+    (hB : normal_subgroup Γ B) :
+    normal_subgroup Γ (subgroup_intersection A B) := by
+  sorry
+
+
+-- Third isomorphism theorem (aspirational): if N ⊆ K are both normal
+-- in G, then (G/N)/(K/N) ≅ G/K. Statable only after the full quotient
+-- machinery in Stage 7 lands cleanly; left as a known unknown.
+theorem third_isomorphism_theorem {G : Type}
+    (Γ : MyGroup G) (N K : MySubgroup Γ)
+    (hN : normal_subgroup Γ N)
+    (hK : normal_subgroup Γ K)
+    (hNK : ∀ x : G, N.carrier x → K.carrier x) :
+    True := by
+  sorry
+
+-/  -- end PHASED RUN GUARD

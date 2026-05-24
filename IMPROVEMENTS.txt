@@ -21,6 +21,51 @@ Within each section, top item is highest impact / lowest cost.
 CORRECTNESS / ROBUSTNESS
 --------------------------------------------------------------------------------
 
+  * Don't make LLM_ERROR fatal — offer at least one corrective retry.
+      Observed: Stage 5+6 phased run (2026-05-24). Iter 3 was making
+      forward progress (errors 22 → 12), iter 4's LLM response failed
+      Pydantic validation (Bug 12), controller threw AskLLMError and
+      the loop quit immediately. No retry. Suggested fix: on
+      AskLLMError that's a schema-validation failure, retry once with
+      a corrective system-prompt addendum ("your previous response
+      had X type error; emit Y instead"). Only escalate to fatal on
+      the second failure. Transport-layer errors (timeout, rate
+      limit) the SDK already retries; this would cover the
+      MODEL-OUTPUT-MALFORMED class specifically.
+
+  * Cost tracking on failed iters.
+      Observed: same run. iter 4 burned ~$0.10 of API budget on a
+      malformed response, but cost=$X at end-of-run summary only sums
+      IterationState rows — which failed iters never produce. The
+      cumulative cost line under-reports actual spend.
+      Suggested fix: ask_llm tracks tokens-charged for ALL calls, not
+      just successful ones; controller writes a sidecar
+      `failed_calls.jsonl` capturing tokens + cost for any non-200
+      that still consumed quota.
+
+  * Model-strategy ceiling at ~10 sorries (single-shot rewrite).
+      Observed: Stage 5-9 dump on 2026-05-24 (21 sorries).
+      Sonnet 4.6 hits a measurable ceiling around 10-11 sorries
+      per single response. Above that, accumulated mistakes in the
+      rewrite exceed what the cleanup loop can recover before the
+      next prompt becomes too large for Anthropic's
+      generation-time budget. Two mitigations: (a) `--sorries-per-
+      iter N` CLI flag (see UX section); (b) tool-use migration
+      (already DECIDED for v1.1.0) lets us split submit_fix into
+      per-fix calls. Until one lands, runs >10 sorries are
+      fragile.
+
+  * Anthropic generation-time-budget timeout cascade.
+      Observed: same Stage 5-9 dump. When max_tokens is high (32K)
+      and the prompt is large (broken file + many diagnostics +
+      memo), Anthropic returns "Request timed out or interrupted"
+      and the SDK auto-retries — same input, same wall, 5 retries
+      all fail. We have no path to say "retry with smaller
+      max_tokens / fewer diagnostics shown / abbreviated memo."
+      Suggested fix: on the SDK's timeout-with-retries-exhausted,
+      controller drops max_tokens by half and retries the same
+      iter once before exiting with LLM_ERROR.
+
   * Prune unused `have` statements in final proofs.
       Observed: AmGm.lean v1.0.4 run left `have hxy : 0 < x * y := mul_pos
       hx hy` unused — Claude added it on a failed attempt and the
@@ -50,6 +95,19 @@ CORRECTNESS / ROBUSTNESS
 --------------------------------------------------------------------------------
 UX / DX
 --------------------------------------------------------------------------------
+
+  * `--sorries-per-iter N` CLI flag.
+      Forces the LLM to a bounded scope per response, preventing the
+      "rewrite everything in one shot" strategy that hits the 10-
+      sorry ceiling. When set, prompt is modified to add: "Choose at
+      most N sorries to fix this iteration; pick those whose proofs
+      can be given in under 10 lines; leave others as sorry." The
+      controller validates the response respects the cap. Tradeoff:
+      total cost is higher (N+ iterations vs 1-3) but failure
+      modes are bounded — no more catastrophic regressions or
+      timeout cascades. Default unbounded (current behavior). Worth
+      pairing with selection-guidance: "prefer sorries whose
+      dependencies are already proven."
 
   * Pause / step mode wiring.
       pause.py is fully implemented (c/r/n/a/q/Q/s/d/h/g/b menu).

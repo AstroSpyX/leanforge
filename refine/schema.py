@@ -14,7 +14,7 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class RepairStrategy(StrEnum):
@@ -64,3 +64,13 @@ class RefineResponse(BaseModel):
     intended_scope: list[ScopeItem]
     fixes: list[Fix]
     remaining_blockers: list[str]
+
+    @field_validator("remaining_blockers", mode="before")
+    @classmethod
+    def _coerce_blockers_to_str(cls, v: object) -> object:
+        # Models sometimes emit diagnostic IDs as ints (matching the int
+        # form of `diagnostic_ids` in Fix). Accept either form and
+        # standardize on strings here.
+        if isinstance(v, list):
+            return [str(x) for x in v]
+        return v

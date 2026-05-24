@@ -5,6 +5,135 @@
 
 
 -------
+2026-05-24 — milestone — Group.lean Stage 5 + Stage 6 fully proven (phased run, 3 attempts)
+-------
+
+  Test: 11 sorries across Stage 5 (equivalence relations on G,
+  coset equivalence) and Stage 6 (right cosets, partition,
+  normal characterizations, kernel_is_normal). Stages 7-9 were
+  block-commented to make SUCCESS reachable; this is the phased-
+  run pattern recommended in the strategy-ceiling discovery
+  entry below.
+
+  Result: SUCCESS after 3 attempts.
+    Attempt 1: died at iter 4 to Bug 12 (schema mismatch).
+               Cost $0.41. State preserved at 12 errors.
+    Attempt 2: ran from the 12-error state after v1.0.8 fix
+               landed. Made it to 2 errors at iter 9. Budget
+               exceeded ($1.00 cap) before convergence. Two
+               apply_edits coord failures (Bug A) and three
+               rate-limit-retry storms ate ~$0.37 of the budget.
+               Cost $1.01.
+    Attempt 3: continuation from 2 errors. SUCCESS at iter 8.
+               Cost $0.62.
+
+  Total: ~$2.04 / 11 sorries = ~$0.19/sorry — 5x the Stage 3+4
+  rate ($0.04/sorry). Two contributing factors:
+    1. Subgroup-membership manipulations (H.carrier (Γ.op a b))
+       are more abstract than the algebraic-identity proofs of
+       earlier stages; the agent spent more iters experimenting.
+    2. Rate-limit cascades and apply_edits coord drift consumed
+       ~30% of attempt 2's budget on non-productive retries.
+
+  This run validated the phased-run pattern: block-commenting
+  out-of-scope stages makes SUCCESS reachable for the in-scope
+  ones, runs land within budget when scope is right-sized, and
+  the per-run artifacts compose cleanly across multiple
+  attempts via .refine/<slug>.archive-*.
+
+  Files: examples/scratch/Scratch/Group.lean (Stages 5-6 proven;
+         Stages 7-9 in block-comment guard).
+
+
+-------
+2026-05-24 — v1.0.8 — Bug 12 fix: remaining_blockers schema coercion + prompt clarification
+-------
+
+  Test: phased run on Stage 5+6 (11 sorries). Iter 4 died with:
+  "9 validation errors for RefineResponse / remaining_blockers.0
+   Input should be a valid string [type=string_type, input_value=2,
+   input_type=int]" — Sonnet emitted [2, 4, 5, ...] for
+  remaining_blockers.
+
+  Bug 12 — schema/prompt mismatch on remaining_blockers.
+    Prompt says "list its `id` in remaining_blockers" while id is
+    explicitly an int everywhere else (Fix.diagnostic_ids: list[int]).
+    Pydantic schema requires list[str]. The model followed the natural
+    reading and used the int form, failing validation.
+    Fix: @field_validator('remaining_blockers', mode='before') on
+    RefineResponse coerces int → str list-wise. Prompt updated in two
+    places to say "list its id as STRING (e.g. \"2\")". Belt-and-
+    suspenders: prompt nudges correct behavior; schema is tolerant.
+
+  Files: refine/schema.py (validator), refine/prompt_builder.py
+         (two prompt sites), refine/tests/test_schema.py (two new tests
+         covering pure-int and mixed int/str coercion).
+
+  QA: 342 tests, ruff + mypy --strict clean.
+
+  Related findings (not fixed yet — see IMPROVEMENTS.txt):
+    - LLM_ERROR is fatal across entire run. A single malformed
+      response kills a loop that was making forward progress
+      (iter 3 had gone 22 → 12 errors). Should at minimum offer
+      one corrective-retry attempt.
+    - Cost tracking drops on failed iters. The user-facing
+      "cost=$X" line at end of run only sums iter cumulative_cost,
+      but failed iters never write IterationState, so the API
+      call's tokens are invisible.
+
+
+-------
+2026-05-24 — discovery — strategy ceiling at ~10 sorries; Anthropic timeout cascade
+-------
+
+  Test: Stages 5-9 dumped into one run (21 sorries on a ~600-line
+  file). max_tokens=32768, max_iters=50, max_cost=$5.00.
+
+  What happened:
+    iter 1: regression. Sonnet's "rewrite everything in one shot"
+            strategy that worked at 7-10 sorries did NOT scale to 21.
+            Resolved 20 sorries but introduced 37 new errors; net
+            regression. Cost $0.18.
+    iter 2: LLM_ERROR. The cleanup prompt was now enormous (broken
+            874-line file + 36 diagnostics + recent-failures memo).
+            Sonnet tried another big generation. Anthropic's server-
+            side timeout for very-long-generation requests fired.
+            SDK auto-retried 5 times; each hit the same wall.
+            Final: "Request timed out or interrupted."
+
+  Bug C (revisited) — model-strategy ceiling.
+    The agent's "fix it all in one response" approach has a
+    measurable upper bound around 10-11 sorries on Sonnet 4.6.
+    Below that, single-shot is the cheapest path. Above that, the
+    accumulated errors in the rewrite exceed what the cleanup loop
+    can recover from before the next iter's prompt becomes too big
+    to process. Not a code bug — a strategy bug surfaced by scale.
+
+  Bug D (new) — Anthropic server-side request timeout cascade.
+    When max_tokens is high (32K) and the prompt is also large
+    (broken file + many diagnostics + memo), Anthropic's API has
+    an upper bound on the time it'll spend generating before
+    returning an error. We get "Request timed out or interrupted."
+    The SDK auto-retries 5 times by default but each retry hits
+    the same wall. We have no graceful-degradation path: we can't
+    say "this time generate less" mid-retry.
+
+  Recovery: reverted to Stage 5+6 only (11 sorries) phased run.
+  That run uncovered Bug 12 (above) and validated the strategy:
+  smaller-scope runs land cleanly; bigger ones cascade.
+
+  Forward decision: pause on big-scope runs until either
+    (a) --sorries-per-iter N CLI flag lands (forces small per-iter
+        response shape), OR
+    (b) tool-use migration (v1.1.0) lands (Bug 12 disappears
+        structurally; opens door to per-tool-call scoping).
+
+  Files: no code change in this entry — discovery + design
+         direction. The Stage 5+6 phased run trace lives at
+         examples/scratch/.refine/Scratch__Group.lean.archive-*.
+
+
+-------
 2026-05-24 — milestone — Group.lean Stage 3 + Stage 4 fully proven; 10 sorries in 9 iters
 -------
 

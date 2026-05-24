@@ -85,6 +85,23 @@ class TestRefineResponse:
         with pytest.raises(ValidationError):
             RefineResponse(**payload)
 
+    def test_remaining_blockers_coerces_ints_to_strings(self) -> None:
+        """Bug 12: models sometimes emit diagnostic IDs as ints in
+        remaining_blockers (mirroring Fix.diagnostic_ids: list[int]).
+        Coerce to strings so validation doesn't fail on a recoverable
+        type mismatch."""
+        payload = _valid_response_payload()
+        payload["remaining_blockers"] = [2, 4, 11]
+        response = RefineResponse(**payload)
+        assert response.remaining_blockers == ["2", "4", "11"]
+
+    def test_remaining_blockers_accepts_mixed_int_and_str(self) -> None:
+        """A list containing both forms also normalizes to all strings."""
+        payload = _valid_response_payload()
+        payload["remaining_blockers"] = [2, "lemma X missing", 5]
+        response = RefineResponse(**payload)
+        assert response.remaining_blockers == ["2", "lemma X missing", "5"]
+
     def test_intended_scope_with_range_parses(self) -> None:
         payload = _valid_response_payload()
         payload["intended_scope"] = [
