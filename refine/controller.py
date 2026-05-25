@@ -14,6 +14,11 @@ from pydantic import ValidationError
 from llm import AskLLMError, Response, ask
 from llm.tools.submit_fix import SUBMIT_FIX_TOOL
 from refine.artifact_store import ArtifactStore
+from refine.checkers import CheckerStage
+from refine.checkers.lean_compile import LeanCompileChecker
+from refine.checkers.no_sorry import NoSorryChecker
+from refine.checkers.runner import run_stages
+from refine.checkers.signature_preservation import SignaturePreservationChecker
 from refine.coords import normalize_line_endings
 from refine.cost import base_cost_usd, iteration_cost_usd
 from refine.diff_summary import compute_text_diff
@@ -73,8 +78,25 @@ def refine(
     max_cost_usd: float = 1.00,
     max_tokens: int = 8192,
     keep_raw_llm_io: bool = True,
+    extra_stages: list[CheckerStage] | None = None,
 ) -> History:
-    """Drive the refine loop end-to-end. Returns the populated History."""
+    """Drive the refine loop end-to-end. Returns the populated History.
+
+    Success criterion: every `CheckerStage` in the effective pipeline
+    returns passed=True after an iteration. The effective pipeline is
+    always `default_stages(original_sigs)` (Lean compiles, no sorries,
+    signatures preserved) plus any `extra_stages` appended at the end.
+
+    Callers (e.g. CLI) compose richer pipelines by passing
+    `extra_stages`:
+      - PatternAbsentChecker for refactor goals
+      - LLMJudgeChecker for goal-text-derived completion checks
+      - External-command checkers, etc.
+
+    extra_stages run AFTER the defaults — the stage runner
+    short-circuits so the judge / pattern check only fires once Lean
+    is clean and signatures are intact.
+    """
     project_path = Path(project_root).resolve()
     store = ArtifactStore(project_root=project_path, file_relpath=file_relpath)
     archived = store.start_new_run()
@@ -95,6 +117,10 @@ def refine(
     original_axioms = axiom_decl_names(starter_sigs)
     original_sorries = decls_with_sorry_warning(initial_eval.diagnostics)
 
+    effective_stages = default_stages(original_sigs)
+    if extra_stages:
+        effective_stages = effective_stages + list(extra_stages)
+
     history = History(
         project_root=str(project_path),
         file_relpath=file_relpath,
@@ -110,12 +136,22 @@ def refine(
     )
     history.iterations.append(initial_state)
     store.append_history(initial_state)
-    # The loop is done only when there are no errors AND no remaining sorries.
-    # Lean reports `sorry` as a warning, not an error, so error_count alone
-    # would short-circuit on a file full of unproven theorems.
-    if initial_state.error_count == 0 and not original_sorries:
+
+    # Stage check on the baseline. If all stages pass at iter 0, the
+    # file already satisfies the goal — exit before any LLM call.
+    stage_result = run_stages(
+        effective_stages, starter_content, initial_eval.diagnostics
+    )
+    if stage_result.passed:
         history.final_status = Status.SUCCESS
         return history
+    carryover_pseudo_diagnostics = stage_result.pseudo_diagnostics
+    if stage_result.stage_name != "all":
+        logger.info(
+            "iter=0 stage_fail stage=%s pseudo_diagnostics=%d",
+            stage_result.stage_name,
+            len(carryover_pseudo_diagnostics),
+        )
 
     cumulative_input = 0
     cumulative_output = 0
@@ -140,6 +176,7 @@ def refine(
                 original_sorries=original_sorries,
                 keep_raw_llm_io=keep_raw_llm_io,
                 prev_state=latest,
+                extra_diagnostics=carryover_pseudo_diagnostics,
             )
         except AskLLMError as exc:
             logger.error("LLM call failed at iter %d: %s", iteration, exc)
@@ -152,20 +189,53 @@ def refine(
         cumulative_output = outcome_state.cumulative_output_tokens
         cumulative_cost = outcome_state.cumulative_cost_usd
 
-        if outcome_state.status == Status.SUCCESS:
+        # Run stages on the iter's output. If all pass we're done —
+        # otherwise capture the failing pseudo-diagnostics for the
+        # next iter's prompt.
+        stage_result = run_stages(
+            effective_stages,
+            outcome_state.file_content,
+            outcome_state.raw_diagnostics,
+        )
+        carryover_pseudo_diagnostics = stage_result.pseudo_diagnostics
+        if stage_result.passed:
             history.final_status = Status.SUCCESS
             break
+        logger.info(
+            "iter=%d stage_fail stage=%s pseudo_diagnostics=%d",
+            iteration,
+            stage_result.stage_name,
+            len(carryover_pseudo_diagnostics),
+        )
         if outcome_state.status == Status.BUDGET_EXCEEDED:
             history.final_status = Status.BUDGET_EXCEEDED
             break
 
     if history.final_status is None:
-        history.final_status = (
-            Status.SUCCESS
-            if history.latest and history.latest.status == Status.SUCCESS
-            else Status.MAX_ITERS
-        )
+        history.final_status = Status.MAX_ITERS
     return history
+
+
+def default_stages(original_sigs: dict[str, str]) -> list[CheckerStage]:
+    """The stage pipeline used when `refine(stages=None)`.
+
+    Mirrors the pre-framework success criterion:
+      syntax — Lean must compile cleanly (no errors)
+      policy — no `sorry` warnings AND no signature regression
+    """
+    return [
+        CheckerStage("syntax", (LeanCompileChecker(),)),
+        CheckerStage(
+            "policy",
+            (
+                NoSorryChecker(),
+                SignaturePreservationChecker(
+                    name="signature_preservation",
+                    original_sigs=original_sigs,
+                ),
+            ),
+        ),
+    ]
 
 
 def _bootstrap_starter(
@@ -290,13 +360,23 @@ def _run_one_iteration(
     original_sorries: set[str],
     keep_raw_llm_io: bool,
     prev_state: IterationState,
+    extra_diagnostics: list[dict[str, Any]] | None = None,
 ) -> IterationState:
     """Build prompt, call LLM, apply edits, re-run leanforge, classify.
-    Returns the iteration's IterationState (also writes snapshot + raw io)."""
+    Returns the iteration's IterationState (also writes snapshot + raw io).
+
+    `extra_diagnostics` is a list of pseudo-diagnostics carried over
+    from the prior iter's stage failures (e.g. from a pattern_absent
+    checker or LLM judge). They get merged with Lean's real
+    diagnostics so the agent sees a uniform list of issues.
+    """
     started_at = time.time()
     project_path = Path(history.project_root)
 
-    diagnostics_with_ids = assign_diagnostic_ids(prev_state.raw_diagnostics)
+    merged_diagnostics = list(prev_state.raw_diagnostics)
+    if extra_diagnostics:
+        merged_diagnostics.extend(extra_diagnostics)
+    diagnostics_with_ids = assign_diagnostic_ids(merged_diagnostics)
     enclosing_decls = _unique_enclosing_decl_names(diagnostics_with_ids)
     decl_names = [s.name for s in extract_signatures(prev_state.file_content)]
     recent_failures = _assemble_recent_failures(history)

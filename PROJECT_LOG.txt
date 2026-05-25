@@ -5,6 +5,110 @@
 
 
 -------
+2026-05-24 — v1.2.0 — pluggable checker framework (deterministic + LLM judge)
+-------
+
+  Scope: branch `checker-framework`. Replaces the hardcoded
+  "no errors AND no sorries" success criterion with a stage-based
+  pipeline of independent Checker instances. The loop's "are we done?"
+  question is now answered by composable predicates instead of one
+  if-statement in the controller.
+
+  Why now:
+    Refactor goals (rewrite using new notation, switch tactic
+    style, rename) produce files that compile AT BOTH ENDS — before
+    and after. The old loop couldn't tell the difference between
+    "started" and "done". The checker framework absorbs:
+      - deterministic checks (regex grep over proof bodies)
+      - LLM-judge checks (cheap-model verdict on goal-text completion)
+      - external-tool checks (subprocess; pass on exit 0)
+      - any future checker — one new file in refine/checkers/
+
+  Architecture:
+    refine/checkers/
+    ├── base.py                       — Checker ABC, CheckResult,
+    │                                   CheckerStage, StageResult
+    ├── runner.py                     — run_stages with short-circuit
+    ├── lean_compile.py               — extracts the old "no errors"
+    ├── no_sorry.py                   — extracts the old sorry-warning
+    ├── signature_preservation.py     — wraps existing sig-check logic
+    ├── pattern_absent.py             — regex grep over proof bodies
+    └── llm_judge.py                  — cheap-model goal-completion verdict
+
+    llm/tools/judge_goal.py           — ToolSpec (strict schema)
+
+  Stage semantics:
+    - Within a stage: AND. All checkers run; all must pass.
+      Sibling failures are reported together so the agent fixes
+      them in one shot.
+    - Across stages: SHORT-CIRCUIT. First failing stage halts.
+      Subsequent stages don't run. This keeps the LLM judge cost-
+      free until syntax / policy / style are already clean.
+    - Default stages mirror pre-framework behavior:
+        syntax — Lean compile
+        policy — no sorry + signature preservation
+      Plus user-supplied extra_stages appended at the end.
+
+  Failure-feedback loop:
+    Failing checkers emit `pseudo_diagnostics` in the same dict
+    shape Lean produces (severity / messageText / range). The
+    controller merges them into the next iter's prompt alongside
+    real diagnostics. The agent doesn't distinguish "Lean said X"
+    from "judge said Y" — both are uniform diagnostics to fix.
+
+  CLI surface:
+    --judge MODEL                       append LLMJudgeChecker stage
+    --check-pattern-absent NAME:PAT1,…  append PatternAbsentChecker stage
+
+    Example for the notation-refactor goal:
+      refine ... --goal "Use *, ⁻¹, e notation in proof bodies" \\
+                 --check-pattern-absent 'no_gamma:Γ\\.op,Γ\\.inv,Γ\\.e' \\
+                 --judge haiku
+
+  Tool-use leverage:
+    The LLM judge is itself a tool-use call (forces JUDGE_GOAL_TOOL,
+    strict mode). Same `ask()` transport, same cache, same error
+    hierarchy as the worker. Adding a third role later (planner,
+    critic, summarizer) is the same shape — define a ToolSpec,
+    call ask(), parse response.tool_calls[0].input. The v1.1.0
+    tool-use architecture pays dividends here for free.
+
+  Cost model:
+    - No --judge flag: zero added cost. Loop runs as before.
+    - With --judge haiku: ~$0.007 per iter for the judge call,
+      but only on iters where syntax/policy/style stages pass.
+      Realistically <10% of total run cost.
+    - With --judge gemini-flash-lite: ~$0.001 per iter — effectively
+      free. Recommended default once Gemini provider is stable.
+
+  QA: 424 tests pass (+38 new for the framework). ruff + mypy
+  strict clean.
+
+  Files added:
+    refine/checkers/__init__.py
+    refine/checkers/base.py
+    refine/checkers/runner.py
+    refine/checkers/lean_compile.py
+    refine/checkers/no_sorry.py
+    refine/checkers/signature_preservation.py
+    refine/checkers/pattern_absent.py
+    refine/checkers/llm_judge.py
+    llm/tools/judge_goal.py
+    refine/tests/checkers/{__init__,test_base,test_runner,
+        test_lean_compile,test_no_sorry,test_pattern_absent,
+        test_signature_preservation,test_llm_judge,test_cli_specs}.py
+
+  Files modified:
+    refine/controller.py (refine() takes extra_stages; per-iter
+        stage check replaces iter-0 short-circuit; pseudo_diagnostics
+        carryover threaded through _run_one_iteration)
+    refine/__main__.py (--judge + --check-pattern-absent flags;
+        _build_extra_stages helper; _parse_pattern_spec)
+
+  Branch: checker-framework (ready to merge to main).
+
+
+-------
 2026-05-24 — milestone — Group.lean Stage 8 (first iso theorem) proven by Gemini Flash in 5 iters / $0.20
 -------
 
