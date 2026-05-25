@@ -55,3 +55,58 @@ class TestPatternAbsentChecker:
         assert diag["range"]["start"]["line"] == 1  # second line, 0-indexed
         assert "messageText" in diag
         assert "Γ.op" in diag["messageText"] or "x" in diag["messageText"]
+
+
+def _proof_body_with_n_matches(n: int) -> str:
+    """Generate a synthetic file with N pattern occurrences in a single body."""
+    body_lines = "\n".join("  have : Γ.op a a = a := sorry" for _ in range(n))
+    return f"theorem foo : True := by\n{body_lines}\n  trivial\n"
+
+
+class TestPatternAbsentCheckerCap:
+    def test_cap_truncates_to_first_n_plus_summary(self) -> None:
+        """With 100 matches and max_reported=20, surface 20 specific +
+        1 summary = 21 total. Agent gets a workable batch per iter."""
+        content = _proof_body_with_n_matches(100)
+        checker = PatternAbsentChecker(
+            name="x", patterns=(r"Γ\.op",), max_reported=20
+        )
+        result = checker.check(content, [])
+        assert result.passed is False
+        assert len(result.pseudo_diagnostics) == 21
+        summary = result.pseudo_diagnostics[-1]
+        assert "and 80 more" in summary["messageText"]
+
+    def test_no_cap_emits_all_when_below_threshold(self) -> None:
+        """5 matches with cap=20 → emit all 5, no summary line."""
+        content = _proof_body_with_n_matches(5)
+        checker = PatternAbsentChecker(
+            name="x", patterns=(r"Γ\.op",), max_reported=20
+        )
+        result = checker.check(content, [])
+        assert len(result.pseudo_diagnostics) == 5
+        for d in result.pseudo_diagnostics:
+            assert "and" not in d["messageText"] or "more" not in d["messageText"]
+
+    def test_cap_at_threshold_exactly_no_summary(self) -> None:
+        """Exactly max_reported matches → emit all, no summary."""
+        content = _proof_body_with_n_matches(20)
+        checker = PatternAbsentChecker(
+            name="x", patterns=(r"Γ\.op",), max_reported=20
+        )
+        result = checker.check(content, [])
+        assert len(result.pseudo_diagnostics) == 20
+
+    def test_max_reported_zero_disables_cap(self) -> None:
+        """Setting cap=0 means surface every match (legacy behavior)."""
+        content = _proof_body_with_n_matches(50)
+        checker = PatternAbsentChecker(
+            name="x", patterns=(r"Γ\.op",), max_reported=0
+        )
+        result = checker.check(content, [])
+        assert len(result.pseudo_diagnostics) == 50
+
+    def test_default_cap_is_twenty(self) -> None:
+        """The default value 20 is calibrated from real runs — pin it."""
+        checker = PatternAbsentChecker(name="x", patterns=(r"x",))
+        assert checker.max_reported == 20

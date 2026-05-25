@@ -34,10 +34,20 @@ class PatternAbsentChecker(Checker):
     Each pattern is matched against every line that the heuristic
     classifies as a proof body. Matches become pseudo-diagnostics
     pointing at the offending line.
+
+    `max_reported` caps how many per-line pseudo-diagnostics are
+    surfaced to the next iter's prompt. Above the cap, the rest are
+    summarized into a single "... and N more" entry. Without the cap,
+    surfacing 100+ matches at once overwhelms the worker LLM — it
+    attempts mass edits that hit coordinate-drift apply_edits
+    failures (~40% iter waste observed on gemini-flash). With the
+    cap, the agent gets a workable batch each iter and converges
+    steadily. Set to 0 for unlimited.
     """
 
     name: str
     patterns: tuple[str, ...]
+    max_reported: int = 20
     # Lines whose stripped form starts with one of these prefixes are
     # treated as declaration HEADERS (signatures), not proof bodies.
     # The "is this a body?" state is sticky: after a header we're "in
@@ -91,4 +101,21 @@ class PatternAbsentChecker(Checker):
                         },
                     }
                 )
-        return CheckResult(passed=not offenses, pseudo_diagnostics=offenses)
+        if not offenses:
+            return CheckResult(passed=True)
+        if self.max_reported > 0 and len(offenses) > self.max_reported:
+            reported = offenses[: self.max_reported]
+            remainder = len(offenses) - self.max_reported
+            reported.append(
+                {
+                    "severity": "error",
+                    "messageText": (
+                        f"pattern_absent[{self.name}]: ... and {remainder} "
+                        f"more match(es) elsewhere in the file (showing "
+                        f"first {self.max_reported}; the next iter will "
+                        f"surface a fresh batch after these are fixed)"
+                    ),
+                }
+            )
+            return CheckResult(passed=False, pseudo_diagnostics=reported)
+        return CheckResult(passed=False, pseudo_diagnostics=offenses)
