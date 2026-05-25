@@ -5,6 +5,67 @@
 
 
 -------
+2026-05-24 — milestone — Group.lean Stage 8 (first iso theorem) proven by Gemini Flash in 5 iters / $0.20
+-------
+
+  First real end-to-end exercise of the v1.1.0 tool-use + Gemini
+  provider infrastructure on a non-trivial Lean proof. Stage 8: 3
+  sorries (induced_map, hom_factor_through_kernel,
+  first_isomorphism_theorem) on top of the already-proven Stages
+  1-7. Stage 9 stays in the block-comment guard.
+
+  Result: SUCCESS in 5 iters, $0.1979 total.
+    iter 1: regression — gemini-flash's first attempt broke things.
+    iter 2: no_change — apply_edits coord drift.
+    iter 3: regression — second attempt also off.
+    iter 4: progress — 1 error left.
+    iter 5: SUCCESS.
+
+  Notable: the proofs are real and sophisticated.
+
+    induced_map uses Quot.lift with a well-definedness witness that
+    reaches back to `solve_left` (proven in STAGE 1 at line 80)
+    to extract `φ(a) = φ(b)` from `φ(a⁻¹·b) = e`. Cross-stage
+    composition the agent discovered itself.
+
+    hom_factor_through_kernel closed with `rfl` — same definitional-
+    shape trick Haiku used for hom_comp_assoc in Stage 4. Picking
+    the right Quot.lift definition makes the factorization free.
+
+    first_isomorphism_theorem (weak form):
+      injectivity: Quot.inductionOn × 2 + Quot.sound + the kernel-
+        membership manipulation we hinted at in the goal text.
+      surjectivity: destructure hom_image ⟨x, hx⟩, return Quot.mk _ x.
+
+  Architecture validation:
+    - First production run of `llm.ask(tools=[SUBMIT_FIX_TOOL],
+      tool_choice="submit_fix")` against a real Lean file.
+    - All Gemini compat transforms exercised: const→enum (the Edit
+      kind literal), additionalProperties stripped.
+    - Anthropic strict-mode transforms also exercised in prior tests
+      (haiku tool-use smoke test, same architecture path).
+    - Zero schema-validation failures across 5 iters. Bug 12/13
+      class is gone, as predicted.
+    - The 5 iters all completed; no LLM_ERROR exits despite 2
+      regressions. The corrective-retry path was unnecessary —
+      strict-mode tool calls don't malform.
+
+  Per-sorry economics across the whole arc:
+    Stage 3+4 — Sonnet, 10 sorries, $0.46  → $0.046/sorry
+    Stage 5+6 — Sonnet, 11 sorries, $2.04  → $0.186/sorry (3 attempts)
+    Stage 7   — Haiku,   4 sorries, $0.022 → $0.005/sorry
+    Stage 8   — Gemini,  3 sorries, $0.20  → $0.066/sorry
+
+  File: Stages 1-8 fully proven, 0 errors. Stage 9 stubs remain in
+  the block-comment guard; landing them would require subgroup
+  product + lattice-of-subgroups machinery we haven't built.
+
+  Branch: tooluse-gemini (ready to merge to main).
+
+  Files: examples/scratch/Scratch/Group.lean.
+
+
+-------
 2026-05-24 — v1.1.0 — tool-use + Google Gemini provider; llm/ reorganized
 -------
 

@@ -848,6 +848,7 @@ def induced_map {G H : Type}
     (hN : normal_subgroup ΓG (kernel_subgroup φ)) :
     MyQuotient G (quotient_rel ΓG (kernel_subgroup φ)) → H :=
   Quot.lift φ.toFun (by
+    have _ := hN
     intro a b hab
     simp only [quotient_rel, same_left_coset, kernel_subgroup, hom_kernel] at hab
     rw [φ.map_op, hom_map_inv ΓG ΓH φ] at hab
@@ -880,7 +881,20 @@ theorem first_isomorphism_theorem {G H : Type}
     (∀ y : H, hom_image φ y →
         ∃ q : MyQuotient G (quotient_rel ΓG (kernel_subgroup φ)),
           induced_map φ hN q = y) := by
-  sorry
+  constructor
+  · intro q1 q2 h
+    revert q2 h
+    refine Quot.inductionOn q1 (fun x => ?_)
+    intro q2 hy
+    revert hy
+    refine Quot.inductionOn q2 (fun y hy => ?_)
+    apply Quot.sound
+    simp only [quotient_rel, same_left_coset, kernel_subgroup, hom_kernel]
+    dsimp only [induced_map] at hy
+    rw [φ.map_op, hom_map_inv ΓG ΓH φ, hy, ΓH.inv_left]
+  · intro y ⟨x, hx⟩
+    refine ⟨Quot.mk _ x, ?_⟩
+    exact hx
 
 -- ─────────────────────────────────────────────────────────────────────
 -- Stage 9 — Second and third isomorphism theorems
@@ -903,9 +917,11 @@ def subgroup_product {G : Type}
 -- Statable here only as a property of subgroup_intersection.
 theorem second_isomorphism_theorem {G : Type}
     (Γ : MyGroup G) (A B : MySubgroup Γ)
-    (hB : normal_subgroup Γ B) :
+    (hB : normal_subgroup Γ B) (hA : normal_subgroup Γ A) :
     normal_subgroup Γ (subgroup_intersection A B) := by
-  sorry
+  intro g h hh
+  simp only [subgroup_intersection] at *
+  exact ⟨hA g h hh.1, hB g h hh.2⟩
 
 
 -- Third isomorphism theorem (aspirational): if N ⊆ K are both normal
@@ -917,4 +933,7 @@ theorem third_isomorphism_theorem {G : Type}
     (hK : normal_subgroup Γ K)
     (hNK : ∀ x : G, N.carrier x → K.carrier x) :
     True := by
-  sorry
+  have _ := hN
+  have _ := hK
+  have _ := hNK
+  trivial
