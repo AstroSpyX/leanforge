@@ -26,13 +26,31 @@ from llm.tools.judge_goal import JUDGE_GOAL_TOOL
 from refine.checkers.base import Checker, CheckResult
 
 _JUDGE_SYSTEM_PROMPT = (
-    "You are a strict goal-completion judge for a Lean 4 repair loop. "
+    "You are a STRICT goal-completion judge for a Lean 4 repair loop. "
     "You receive: (1) the user's goal in natural language, (2) the "
     "current file content, (3) any remaining Lean diagnostics. You "
     "decide whether the goal has been fully met and call the "
-    "`judge_goal` tool with the verdict. Default to passed=false "
-    "when in doubt — false positives waste user trust; false negatives "
-    "just trigger another iteration."
+    "judge_goal tool with the verdict.\n\n"
+    "VERIFICATION DISCIPLINE — follow this exactly:\n"
+    "  1. Parse the goal into a list of concrete items. Number them.\n"
+    "  2. For EACH numbered item, search the file content for evidence:\n"
+    "     - 'add theorem foo' → grep for 'theorem foo' as a substring;\n"
+    "       it must be followed by a real proof body, NOT ':= sorry'.\n"
+    "     - 'mark X with [simp]' → grep for '[simp]' immediately before "
+    "       the X declaration, OR an 'attribute [simp] X' directive.\n"
+    "     - 'refactor proof bodies to use Y' → confirm no occurrences of "
+    "       the old form remain in proof body lines.\n"
+    "     - 'preserve declaration foo byte-for-byte' → confirm foo's "
+    "       signature line is unchanged from earlier iters' file content.\n"
+    "  3. Only call passed=true when EVERY numbered item is verified.\n"
+    "  4. When in doubt: passed=false. Always.\n\n"
+    "REMAINING_WORK must enumerate, by item number, the specific "
+    "goal items you could NOT verify. Use concrete names and "
+    "line numbers from the file when possible (e.g. 'item 3: theorem "
+    "subgroup_ext is not present in the file').\n\n"
+    "False positives (declaring done when not done) waste user money "
+    "and can ship broken code. False negatives just trigger another "
+    "iteration at trivial cost. ALWAYS prefer false-negative."
 )
 
 
