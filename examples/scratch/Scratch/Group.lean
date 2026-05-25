@@ -16,6 +16,8 @@ structure MyGroup (G : Type) where
   inv_left : ∀ a : G, op (inv a) a = e
   inv_right : ∀ a : G, op a (inv a) = e
 
+attribute [simp] MyGroup.e_left MyGroup.e_right MyGroup.inv_left MyGroup.inv_right
+
 section
 variable {G : Type} (Γ : MyGroup G)
 set_option hygiene false
@@ -110,6 +112,7 @@ theorem right_cancel {G : Type} (Γ : MyGroup G)
 
 
 -- Double inverse: (a⁻¹)⁻¹ = a.
+@[simp]
 theorem inv_inv {G : Type} (Γ : MyGroup G)
     (a : G) :
     Γ.inv (Γ.inv a) = a :=
@@ -118,6 +121,7 @@ theorem inv_inv {G : Type} (Γ : MyGroup G)
 
 
 -- Identity inverse: e⁻¹ = e.
+@[simp]
 theorem inv_e {G : Type} (Γ : MyGroup G) :
     Γ.inv Γ.e = Γ.e :=
   by
@@ -197,6 +201,70 @@ def MySubgroup.mem {G : Type} {Γ : MyGroup G}
     (H : MySubgroup Γ) (a : G) : Prop :=
   H.carrier a
 
+end
+
+theorem subgroup_ext (G : Type) (Γ : MyGroup G) (H K : MySubgroup Γ) :
+    H = K ↔ ∀ a : G, H.carrier a ↔ K.carrier a := by
+  constructor
+  · rintro rfl _
+    rfl
+  · intro h
+    have h_eq : H.carrier = K.carrier := by
+      funext a
+      exact propext (h a)
+    cases H
+    cases K
+    subst h_eq
+    rfl
+
+section
+variable {G : Type} (Γ : MyGroup G)
+set_option hygiene false
+local infixl:70 " * " => Γ.op
+local notation:max a "⁻¹" => Γ.inv a
+local notation "e" => Γ.e
+
+-- Stage 2 lattice
+def subgroup_le (H K : MySubgroup Γ) : Prop :=
+  ∀ a : G, H.carrier a → K.carrier a
+
+theorem subgroup_le_refl (H : MySubgroup Γ) : subgroup_le Γ H H :=
+  fun _ h => h
+
+theorem subgroup_le_trans (H K L : MySubgroup Γ) (h1 : subgroup_le Γ H K) (h2 : subgroup_le Γ K L) : subgroup_le Γ H L :=
+  fun a h => h2 a (h1 a h)
+
+theorem subgroup_le_antisymm (H K : MySubgroup Γ) (h1 : subgroup_le Γ H K) (h2 : subgroup_le Γ K H) : H = K := by
+  apply (subgroup_ext G Γ H K).mpr
+  intro a
+  exact ⟨h1 a, h2 a⟩
+
+def trivial_subgroup : MySubgroup Γ :=
+  { carrier := fun x => x = e,
+    e_mem := rfl,
+    op_closed := fun {a b} ha hb => by
+      rw [ha, hb]
+      exact Γ.e_left e,
+    inv_closed := fun {a} ha => by
+      rw [ha]
+      exact inv_e Γ }
+
+theorem trivial_le_subgroup (H : MySubgroup Γ) : subgroup_le Γ (trivial_subgroup Γ) H := by
+  intro a ha
+  dsimp [trivial_subgroup] at ha
+  rw [ha]
+  exact H.e_mem
+
+def top_subgroup : MySubgroup Γ :=
+  { carrier := fun _ => True,
+    e_mem := True.intro,
+    op_closed := fun _ _ => True.intro,
+    inv_closed := fun _ => True.intro }
+
+theorem subgroup_le_top (H : MySubgroup Γ) : subgroup_le Γ H (top_subgroup Γ) := by
+  intro a ha
+  exact True.intro
+
 
 -- Intersection of two subgroups is a subgroup.
 def subgroup_intersection {G : Type}
@@ -227,6 +295,29 @@ structure MyHom {G H : Type}
     ∀ a b : G,
       toFun (ΓG.op a b) =
       ΓH.op (toFun a) (toFun b)
+
+end
+
+theorem hom_ext (G H : Type) (ΓG : MyGroup G) (ΓH : MyGroup H) (phi psi : MyHom ΓG ΓH) :
+    phi = psi ↔ ∀ a : G, phi.toFun a = psi.toFun a := by
+  constructor
+  · rintro rfl _
+    rfl
+  · intro h
+    have h_eq : phi.toFun = psi.toFun := by
+      funext a
+      exact h a
+    cases phi
+    cases psi
+    subst h_eq
+    rfl
+
+section
+variable {G : Type} (Γ : MyGroup G)
+set_option hygiene false
+local infixl:70 " * " => Γ.op
+local notation:max a "⁻¹" => Γ.inv a
+local notation "e" => Γ.e
 
 
 -- ─────────────────────────────────────────────────────────────────────
@@ -317,6 +408,36 @@ def subgroup_generated_by {G : Type}
     (Γ : MyGroup G)
     (S : Set G) : Set G :=
   fun x => ∀ (H : MySubgroup Γ), (∀ s : G, S s → H.carrier s) → H.carrier x
+
+theorem subset_generated (S : Set G) (s : G) (h : S s) :
+    subgroup_generated_by Γ S s := by
+  intro H hH
+  exact hH s h
+
+theorem generated_le (S : Set G) (H : MySubgroup Γ)
+    (h : ∀ s : G, S s → H.carrier s) :
+    ∀ x : G, subgroup_generated_by Γ S x → H.carrier x := by
+  intro x hx
+  exact hx H h
+
+theorem generated_mono (S T : Set G) (h : ∀ a : G, S a → T a) :
+    ∀ x : G, subgroup_generated_by Γ S x → subgroup_generated_by Γ T x := by
+  intro x hx H hH
+  apply hx
+  intro s hs
+  exact hH s (h s hs)
+
+theorem generated_idempotent (S : Set G) :
+    subgroup_generated_by Γ (subgroup_generated_by Γ S) = subgroup_generated_by Γ S := by
+  funext x
+  apply propext
+  constructor
+  · intro hx
+    intro H hH
+    apply hx H
+    exact generated_le Γ S H hH
+  · intro hx
+    exact subset_generated Γ (subgroup_generated_by Γ S) x hx
 
 
 -- Left coset of a subgroup.
