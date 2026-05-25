@@ -31,9 +31,12 @@ MODELS: dict[str, ModelConfig] = {
     # ---- Google Gemini (google-genai SDK) ----
     # Names follow our stable-key convention; bump provider_model_id as
     # Google releases new versions without touching call sites.
-    "gemini-flash-lite": ModelConfig("google", "gemini-2.5-flash-lite", 0.0, 1_000_000),
+    # Verified against ai.google.dev/gemini-api/docs/models on 2026-05-24.
+    "gemini-flash-lite": ModelConfig("google", "gemini-3.1-flash-lite", 0.0, 1_000_000),
     "gemini-flash": ModelConfig("google", "gemini-3.5-flash", 0.0, 1_000_000),
-    "gemini-pro": ModelConfig("google", "gemini-3.1-pro", 0.0, 2_000_000),
+    # Pro is currently only available as a preview ID; the non-preview
+    # `gemini-3.1-pro` was deprecated and shut down on 2026-03-09.
+    "gemini-pro": ModelConfig("google", "gemini-3.1-pro-preview", 0.0, 2_000_000),
 }
 
 DEFAULT_MODEL = "sonnet"

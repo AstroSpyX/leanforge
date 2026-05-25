@@ -2,6 +2,7 @@
 
 import pytest
 
+from llm.models import MODELS
 from refine.cost import (
     COSTS,
     RETRY_COST_INFLATION,
@@ -9,6 +10,23 @@ from refine.cost import (
     base_cost_usd,
     iteration_cost_usd,
 )
+
+
+@pytest.mark.parametrize(
+    "key, provider_model_id",
+    [(k, c.provider_model_id) for k, c in MODELS.items()],
+)
+def test_every_registered_model_has_cost_entry(
+    key: str, provider_model_id: str
+) -> None:
+    """Every model in llm.models.MODELS must have a corresponding COSTS
+    entry — otherwise the refine loop crashes at iter 1 with
+    UnknownModelError. The original miss (gemini-3.5-flash registered
+    in v1.1.0 but not priced) is exactly the gap this test plugs."""
+    assert provider_model_id in COSTS, (
+        f"registry key {key!r} points at provider_model_id "
+        f"{provider_model_id!r} which has no cost entry in COSTS"
+    )
 
 
 class TestBaseCostUsd:

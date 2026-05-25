@@ -2,11 +2,13 @@
 
 Cost table is hard-coded with a documented "verify at integration" note.
 Pricing changes; this table is the single source of truth and gets bumped
-when Anthropic publishes a change.
+when a provider publishes a change.
 
-Cost numbers are cents per 1M tokens. The four kinds match what
-Anthropic's API reports in usage: input, output, cache_creation,
-cache_read.
+Cost numbers are cents per 1M tokens. The four kinds match what both
+providers' APIs report in usage: input, output, cache_creation,
+cache_read. (Gemini's caches API is not currently driven by our
+adapter, so cache_* tokens are always 0 for Gemini in practice; the
+rates are listed for completeness and to keep the schema uniform.)
 """
 
 from __future__ import annotations
@@ -19,9 +21,11 @@ from typing import Final
 # raw `Response.input_tokens` does not separately surface for the first try.
 RETRY_COST_INFLATION: Final[float] = 0.15
 
-# Cents per 1M tokens by model ID. Verify against Anthropic pricing on
-# integration; bump as needed. Keys MUST match models.py `provider_model_id`.
+# Cents per 1M tokens by provider_model_id. Keys MUST match
+# llm/models.py `provider_model_id`. Tests cross-check (see
+# tests/test_cost.py::test_every_registered_model_has_cost).
 COSTS: Final[Mapping[str, Mapping[str, int]]] = {
+    # ---- Anthropic (per anthropic.com/pricing) ----
     "claude-sonnet-4-6": {
         "input": 300,
         "output": 1500,
@@ -39,6 +43,29 @@ COSTS: Final[Mapping[str, Mapping[str, int]]] = {
         "output": 500,
         "cache_creation": 125,
         "cache_read": 10,
+    },
+    # ---- Google Gemini (per ai.google.dev/gemini-api/docs/pricing) ----
+    # Cached input is ~25% of regular input; we use Anthropic's
+    # cache_creation/cache_read pattern even though Gemini bills
+    # differently — the cache_* tokens are always 0 in our pipeline
+    # today, so the exact ratio doesn't bind anything.
+    "gemini-3.5-flash": {
+        "input": 150,
+        "output": 900,
+        "cache_creation": 188,
+        "cache_read": 38,
+    },
+    "gemini-3.1-pro-preview": {
+        "input": 200,
+        "output": 1200,
+        "cache_creation": 250,
+        "cache_read": 50,
+    },
+    "gemini-3.1-flash-lite": {
+        "input": 25,
+        "output": 150,
+        "cache_creation": 31,
+        "cache_read": 6,
     },
 }
 

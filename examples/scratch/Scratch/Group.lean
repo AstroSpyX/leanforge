@@ -826,10 +826,6 @@ def quotient_is_group {G : Type}
 
 
 
-/-  PHASED RUN GUARD: Stages 8-9 are temporarily block-commented so the
-    refine loop only sees the 5 sorries in Stage 7 and SUCCESS is
-    reachable. Un-comment one stage at a time in subsequent runs.
-
 -- ─────────────────────────────────────────────────────────────────────
 -- Stage 8 — Isomorphisms and the first isomorphism theorem
 -- ─────────────────────────────────────────────────────────────────────
@@ -850,8 +846,14 @@ def induced_map {G H : Type}
     {ΓG : MyGroup G} {ΓH : MyGroup H}
     (φ : MyHom ΓG ΓH)
     (hN : normal_subgroup ΓG (kernel_subgroup φ)) :
-    MyQuotient G (quotient_rel ΓG (kernel_subgroup φ)) → H := by
-  sorry
+    MyQuotient G (quotient_rel ΓG (kernel_subgroup φ)) → H :=
+  Quot.lift φ.toFun (by
+    intro a b hab
+    simp only [quotient_rel, same_left_coset, kernel_subgroup, hom_kernel] at hab
+    rw [φ.map_op, hom_map_inv ΓG ΓH φ] at hab
+    have h := solve_left ΓH (ΓH.inv (φ.toFun a)) ΓH.e (φ.toFun b) hab
+    rw [inv_inv, ΓH.e_right] at h
+    exact h.symm)
 
 
 -- The induced map commutes with the quotient projection: φ factors
@@ -861,8 +863,8 @@ theorem hom_factor_through_kernel {G H : Type}
     (φ : MyHom ΓG ΓH)
     (hN : normal_subgroup ΓG (kernel_subgroup φ))
     (g : G) :
-    induced_map φ hN (Quot.mk _ g) = φ.toFun g := by
-  sorry
+    induced_map φ hN (Quot.mk _ g) = φ.toFun g :=
+  rfl
 
 
 -- First isomorphism theorem (weak form): the induced map is injective
@@ -879,7 +881,6 @@ theorem first_isomorphism_theorem {G H : Type}
         ∃ q : MyQuotient G (quotient_rel ΓG (kernel_subgroup φ)),
           induced_map φ hN q = y) := by
   sorry
-
 
 -- ─────────────────────────────────────────────────────────────────────
 -- Stage 9 — Second and third isomorphism theorems
@@ -917,5 +918,3 @@ theorem third_isomorphism_theorem {G : Type}
     (hNK : ∀ x : G, N.carrier x → K.carrier x) :
     True := by
   sorry
-
--/  -- end PHASED RUN GUARD
