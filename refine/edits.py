@@ -1,16 +1,28 @@
-"""Apply LLM-proposed `replace_range` edits to a file's text.
+"""Apply LLM-proposed edits to a file's text.
 
-The only operation supported is `replace_range`. Insert is a zero-width
-range; delete is an empty replacement; full rewrite is `(0,0)..(EOF)`.
+Two edit kinds:
 
-Edits are applied in descending order by start offset so that earlier
-applications don't shift the coordinates of later ones.
+  - `replace_text` (preferred): supply `find_text`, an exact unique
+    substring of the file. We locate it, replace it once. No coordinate
+    arithmetic. Rejected when find_text doesn't appear or appears more
+    than once (the agent must make it more specific).
 
-Three classes of rejection raise typed errors before any text is touched:
-  - OverlappingEditsError: two edits target ranges that intersect
-  - OutOfBoundsError: an edit references a line/column past EOF
-  - SemanticValidationError: post-Pydantic checks failed (well-formed
-    range, valid diagnostic_ids, intended_scope names that exist)
+  - `replace_range` (fallback): supply LSP-style `range` with UTF-16
+    coordinates. We compute the byte offsets and splice. Applied in
+    descending start-offset order so earlier edits don't shift later
+    edits' positions.
+
+Application order: all replace_text edits first (each find is
+independent — uniqueness in the file is the contract), then all
+replace_range edits in reverse-sorted order. This means a range edit's
+coords are interpreted against the POST-text-edit content.
+
+Four classes of rejection raise typed errors before any text is touched:
+  - FindTextNotFoundError: a replace_text edit's find_text doesn't appear
+  - FindTextAmbiguousError: a replace_text edit's find_text appears >1 times
+  - OverlappingEditsError: two range edits target ranges that intersect
+  - OutOfBoundsError: a range edit references a line/column past EOF
+  - SemanticValidationError: post-Pydantic checks failed
 """
 
 from __future__ import annotations
@@ -28,11 +40,20 @@ class EditApplyError(Exception):
 
 
 class OverlappingEditsError(EditApplyError):
-    """Two edits' ranges intersect — caller must not silently merge."""
+    """Two range edits intersect — caller must not silently merge."""
 
 
 class OutOfBoundsError(EditApplyError):
-    """An edit referenced a position past the file's end."""
+    """A range edit referenced a position past the file's end."""
+
+
+class FindTextNotFoundError(EditApplyError):
+    """A replace_text edit's find_text doesn't appear in the file."""
+
+
+class FindTextAmbiguousError(EditApplyError):
+    """A replace_text edit's find_text appears more than once — the
+    agent must make it more specific (add surrounding context lines)."""
 
 
 class SemanticValidationError(EditApplyError):
@@ -49,9 +70,13 @@ def validate_response(
     against the current turn's context.
 
     Three checks:
-      1. Every `range.end >= range.start` (line then character).
+      1. Every range edit has `range.end >= range.start`.
       2. Every `diagnostic_ids` entry references a current turn's ID.
       3. Every `intended_scope[*].name` references a current decl.
+
+    Text edits (kind="replace_text") skip the range check since they
+    don't carry positional info — their find_text uniqueness is
+    verified at apply time.
     """
     errors: list[str] = []
     for fix_index, fix in enumerate(response.fixes):
@@ -61,6 +86,8 @@ def validate_response(
                 f"valid ids: {sorted(valid_diagnostic_ids)}"
             )
         for edit_index, edit in enumerate(fix.edits):
+            if edit.range is None:
+                continue  # replace_text edit; no range to validate here
             start = (edit.range.start.line, edit.range.start.character)
             end = (edit.range.end.line, edit.range.end.character)
             if end < start:
@@ -78,27 +105,72 @@ def validate_response(
 
 
 def apply_edits(content: str, edits: list[Edit]) -> str:
-    """Apply `edits` to `content` (which must be LF-normalized) and return
-    the updated text.
+    """Apply `edits` to `content` (LF-normalized) and return the result.
 
-    No-op when `edits` is empty. Raises OutOfBoundsError on positions past
-    EOF, OverlappingEditsError when any pair of edits intersects.
+    Two-pass: every `replace_text` edit first (one-to-one substring
+    replacement), then every `replace_range` edit in descending
+    start-offset order. Range edits' coordinates are interpreted
+    against the POST-text-edit content.
+
+    Raises:
+      - FindTextNotFoundError: a find_text doesn't appear in the file
+      - FindTextAmbiguousError: a find_text appears more than once
+      - OutOfBoundsError: a range edit references past EOF
+      - OverlappingEditsError: two range edits intersect
     """
     if not edits:
         return content
 
+    result = content
+
+    text_edits = [e for e in edits if e.kind == "replace_text"]
+    for edit in text_edits:
+        result = _apply_text_edit(result, edit)
+
+    range_edits = [e for e in edits if e.kind == "replace_range"]
+    if range_edits:
+        result = _apply_range_edits(result, range_edits)
+
+    return result
+
+
+def _apply_text_edit(content: str, edit: Edit) -> str:
+    """Replace the unique occurrence of edit.find_text in content."""
+    assert edit.find_text is not None  # Pydantic validator
+    needle = edit.find_text
+    count = content.count(needle)
+    if count == 0:
+        raise FindTextNotFoundError(
+            f"replace_text: find_text not present in file. "
+            f"find_text was {needle!r}. "
+            f"Hint: check whitespace / line endings / Unicode characters; "
+            f"the match must be byte-exact."
+        )
+    if count > 1:
+        raise FindTextAmbiguousError(
+            f"replace_text: find_text appears {count} times — must be "
+            f"unique. Add surrounding context (preceding/following lines) "
+            f"to disambiguate. find_text was {needle!r}."
+        )
+    return content.replace(needle, edit.replacement, 1)
+
+
+def _apply_range_edits(content: str, edits: list[Edit]) -> str:
+    """Apply range edits in descending start-offset order."""
     lines = content.split("\n")
     for edit in edits:
-        _reject_if_out_of_bounds(edit, lines)
+        _reject_if_range_out_of_bounds(edit, lines)
 
-    indexed = [
-        (
-            position_to_offset(content, e.range.start.line, e.range.start.character),
-            position_to_offset(content, e.range.end.line, e.range.end.character),
-            e.replacement,
+    indexed = []
+    for e in edits:
+        assert e.range is not None  # Pydantic validator
+        start_off = position_to_offset(
+            content, e.range.start.line, e.range.start.character
         )
-        for e in edits
-    ]
+        end_off = position_to_offset(
+            content, e.range.end.line, e.range.end.character
+        )
+        indexed.append((start_off, end_off, e.replacement))
     indexed.sort(key=lambda triple: triple[0], reverse=True)
 
     # In descending order, the next edit (i+1) starts earlier in the file.
@@ -108,7 +180,8 @@ def apply_edits(content: str, edits: list[Edit]) -> str:
         _, next_end, _ = indexed[i + 1]
         if next_end > curr_start:
             raise OverlappingEditsError(
-                f"edits at offsets {indexed[i + 1][:2]} and {indexed[i][:2]} overlap"
+                f"edits at offsets {indexed[i + 1][:2]} and "
+                f"{indexed[i][:2]} overlap"
             )
 
     result = content
@@ -120,7 +193,8 @@ def apply_edits(content: str, edits: list[Edit]) -> str:
     return result
 
 
-def _reject_if_out_of_bounds(edit: Edit, lines: list[str]) -> None:
+def _reject_if_range_out_of_bounds(edit: Edit, lines: list[str]) -> None:
+    assert edit.range is not None  # Pydantic validator
     line_count = len(lines)
     for label, pos in (("start", edit.range.start), ("end", edit.range.end)):
         if pos.line >= line_count:

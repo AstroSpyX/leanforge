@@ -17,9 +17,9 @@ state Pydantic does not.
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Literal
+from typing import Literal, Self
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class RepairStrategy(StrEnum):
@@ -51,9 +51,52 @@ class ScopeItem(BaseModel):
 
 
 class Edit(BaseModel):
-    kind: Literal["replace_range"]
-    range: Range
+    """One file edit. Two variants distinguished by `kind`.
+
+    `kind="replace_text"` (PREFERRED): provide `find_text` — the
+    exact, unique substring to locate in the file — and `replacement`.
+    Eliminates the coordinate-precision problem: the model doesn't
+    have to count UTF-16 units on Unicode-heavy lines. Requires that
+    `find_text` appears EXACTLY ONCE in the file; ambiguous matches
+    are rejected so the model knows to be more specific.
+
+    `kind="replace_range"` (FALLBACK): provide `range` (start/end
+    positions in 0-indexed LSP UTF-16 units) and `replacement`. Use
+    when the target text is not unique or when only positional info
+    is reliable (e.g. inserting at end-of-file).
+    """
+
+    kind: Literal["replace_range", "replace_text"]
+    range: Range | None = None
+    find_text: str | None = None
     replacement: str
+
+    @model_validator(mode="after")
+    def _validate_kind_fields(self) -> Self:
+        if self.kind == "replace_range":
+            if self.range is None:
+                raise ValueError(
+                    "Edit with kind='replace_range' requires a `range` field"
+                )
+            if self.find_text is not None:
+                raise ValueError(
+                    "Edit with kind='replace_range' must not set `find_text`"
+                )
+        elif self.kind == "replace_text":
+            if self.find_text is None:
+                raise ValueError(
+                    "Edit with kind='replace_text' requires a `find_text` field"
+                )
+            if self.range is not None:
+                raise ValueError(
+                    "Edit with kind='replace_text' must not set `range`"
+                )
+            if not self.find_text:
+                raise ValueError(
+                    "Edit with kind='replace_text' has empty `find_text`; "
+                    "find_text must be a non-empty substring"
+                )
+        return self
 
 
 class Fix(BaseModel):

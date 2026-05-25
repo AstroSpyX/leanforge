@@ -1,14 +1,21 @@
 """Tests for refine.edits — apply, bounds, overlap, semantic validation."""
 
 import pytest
+from pydantic import ValidationError
 
 from refine.edits import (
+    FindTextAmbiguousError,
+    FindTextNotFoundError,
     OutOfBoundsError,
     OverlappingEditsError,
     apply_edits,
     validate_response,
 )
 from refine.schema import Edit, Fix, Position, Range, RefineResponse, RepairStrategy
+
+
+def _text_edit(find: str, replacement: str) -> Edit:
+    return Edit(kind="replace_text", find_text=find, replacement=replacement)
 
 
 def _range(start_line: int, start_char: int, end_line: int, end_char: int) -> Range:
@@ -108,6 +115,91 @@ class TestApplyEdits:
         """End-of-line for "a🎉b" is LSP char 4 (1 + 2 + 1)."""
         new = apply_edits("a🎉b", [_edit(0, 4, 0, 4, "X")])
         assert new == "a🎉bX"
+
+
+class TestReplaceTextEdit:
+    def test_single_unique_find_replaces_once(self) -> None:
+        content = "theorem foo : True := by\n  rw [Γ.op a b]\n  rfl\n"
+        new = apply_edits(content, [_text_edit("Γ.op a b", "a * b")])
+        assert "Γ.op a b" not in new
+        assert "a * b" in new
+
+    def test_find_text_not_found_raises(self) -> None:
+        with pytest.raises(FindTextNotFoundError, match="not present"):
+            apply_edits("hello", [_text_edit("absent", "x")])
+
+    def test_ambiguous_find_text_raises_with_count(self) -> None:
+        content = "foo\nfoo\nfoo\n"
+        with pytest.raises(FindTextAmbiguousError, match="3 times"):
+            apply_edits(content, [_text_edit("foo", "bar")])
+
+    def test_multiple_text_edits_apply_in_order(self) -> None:
+        """Each text edit runs against the post-previous-edits content."""
+        content = "alpha beta gamma\n"
+        new = apply_edits(
+            content,
+            [
+                _text_edit("alpha", "ALPHA"),
+                _text_edit("gamma", "GAMMA"),
+            ],
+        )
+        assert new == "ALPHA beta GAMMA\n"
+
+    def test_text_edit_replaces_multi_line_block(self) -> None:
+        """find_text can span lines — newlines included in the match."""
+        content = "header\nblock line 1\nblock line 2\nfooter\n"
+        new = apply_edits(
+            content,
+            [_text_edit("block line 1\nblock line 2", "replaced")],
+        )
+        assert new == "header\nreplaced\nfooter\n"
+
+    def test_mixed_text_and_range_edits_text_runs_first(self) -> None:
+        """A text edit shifts byte positions before range edits run, so
+        range coords are interpreted against the post-text content."""
+        content = "alpha beta gamma\n"
+        # After text edit: "ALPHA beta gamma\n"
+        # Range edit: line 0 chars 6..10 ("beta") in post-text content
+        new = apply_edits(
+            content,
+            [
+                _text_edit("alpha", "ALPHA"),
+                _edit(0, 6, 0, 10, "BETA"),
+            ],
+        )
+        assert new == "ALPHA BETA gamma\n"
+
+    def test_unicode_find_text_works(self) -> None:
+        """The whole point: Unicode-heavy substrings don't need
+        coordinate arithmetic on the agent side."""
+        content = "  exact Γ.op a Γ.e ▸ rfl\n"
+        new = apply_edits(content, [_text_edit("Γ.op a Γ.e", "a * e")])
+        assert "a * e" in new
+        assert "Γ.op" not in new
+
+
+class TestEditKindValidation:
+    def test_replace_range_without_range_rejected(self) -> None:
+        with pytest.raises(ValidationError, match="requires a `range`"):
+            Edit(kind="replace_range", replacement="x")
+
+    def test_replace_range_with_find_text_rejected(self) -> None:
+        rng = _range(0, 0, 0, 1)
+        with pytest.raises(ValidationError, match="must not set `find_text`"):
+            Edit(kind="replace_range", range=rng, find_text="x", replacement="y")
+
+    def test_replace_text_without_find_text_rejected(self) -> None:
+        with pytest.raises(ValidationError, match="requires a `find_text`"):
+            Edit(kind="replace_text", replacement="x")
+
+    def test_replace_text_with_range_rejected(self) -> None:
+        rng = _range(0, 0, 0, 1)
+        with pytest.raises(ValidationError, match="must not set `range`"):
+            Edit(kind="replace_text", range=rng, find_text="x", replacement="y")
+
+    def test_replace_text_with_empty_find_text_rejected(self) -> None:
+        with pytest.raises(ValidationError, match="empty `find_text`"):
+            Edit(kind="replace_text", find_text="", replacement="x")
 
 
 class TestValidateResponse:

@@ -20,8 +20,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
-PROMPT_VERSION_REPAIR = "repair_v2"
-PROMPT_VERSION_GENERATE = "generate_v2"
+PROMPT_VERSION_REPAIR = "repair_v3"
+PROMPT_VERSION_GENERATE = "generate_v3"
 
 LEAN_TOOLCHAIN_PIN = "Lean 4.29.1, Mathlib v4.29.1"
 MAX_CHANGED_LINES_DEFAULT = 30
@@ -53,12 +53,35 @@ Pick the most specific applicable `strategy` value:
   type_annotation_fix, coercion_fix, induction_repair, rewrite_chain_fix,
   generation, other.
 
+EDIT KINDS.
+Each Edit picks ONE of two kinds:
+
+- `replace_text` (PREFERRED whenever possible). Provide `find_text` —
+  the exact, unique substring to locate in the file — and
+  `replacement`. The controller finds find_text and replaces it once.
+  No coordinate arithmetic. If find_text is NOT unique in the file,
+  the edit is rejected with a message asking you to add surrounding
+  context lines to disambiguate. Use this for refactoring proof
+  bodies, renaming, or any change where the target text is unique.
+
+  Example:
+    {{"kind": "replace_text",
+     "find_text": "  rw [Γ.op a b]\\n  rfl",
+     "replacement": "  rw [a * b]\\n  rfl"}}
+
+- `replace_range` (FALLBACK). Use only when the target text is not
+  unique (e.g. inserting at end-of-file, or the same snippet appears
+  multiple times). Provide `range` with 0-indexed LSP positions and
+  `replacement`. Insert = zero-width range; delete = empty
+  replacement; full rewrite = (0,0)..(EOF).
+
 EDIT RULES.
-- `replace_range` is the only edit kind. Insert = zero-width range;
-  delete = empty replacement; full rewrite = (0,0)..(EOF).
 - The file content in the user message has 0-INDEXED line numbers
-  prefixed (NNN | content), matching the convention your edit ranges
-  use. The first line of the file is line 0.
+  prefixed (NNN | content). The first line of the file is line 0.
+- Prefer `replace_text` — character counting on Unicode-heavy Lean
+  files (Γ, ⁻¹, ∀, →, ⟨, ⟩) is unreliable and the resulting edit
+  often fails apply with an out-of-bounds error. Text-based edits
+  sidestep this entirely.
 - Maximum {MAX_CHANGED_LINES_DEFAULT} lines changed per call.
   Maximum {MAX_CHANGED_DECLS_DEFAULT} declarations touched. Exceeding
   either is rejected.
