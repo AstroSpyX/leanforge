@@ -21,6 +21,29 @@ Within each section, top item is highest impact / lowest cost.
 CORRECTNESS / ROBUSTNESS
 --------------------------------------------------------------------------------
 
+  * Stuck-loop defenses (deterministic-temp + cache + identical
+    prompt = unbreakable; surfaced by Phase 3 run on 2026-05-24).
+    The framework currently lets the loop spin indefinitely (up to
+    max-iters) when temp=0 + identical prompts produce identical
+    broken responses. Layered defenses, in priority order:
+      1. Don't cache responses that produced Lean errors.
+         Infrastructure for the other defenses; alone does NOT help
+         since temp=0 makes fresh calls equally broken. (~30 min)
+      2. Verify + fix loop detection. Controller has
+         LOOP_DETECTION_WINDOW=5 and computes state_hash but
+         apparently didn't fire on the 5-iter repeat. Audit. (~1 hr)
+      3. Stronger recent-failures memo with explicit "you've tried
+         X N times — STOP" framing. Changes prompt → changes
+         response. (~2 hrs)
+      4. Temperature bump on detected repeat (0 → 0.5 on 2+
+         consecutive identical responses). Requires #1. (~1 hr)
+      5. Auto-escalate to a stronger model on detected repeat for
+         a "rescue iter" or two. (~3 hrs)
+      6. Pause-fallback in auto mode — pause.py infrastructure
+         exists but only wired into mode=step. (~half day)
+    None implemented yet; Phase 3 is the first empirical evidence
+    the failure mode is real and matters.
+
   * Don't make LLM_ERROR fatal — offer at least one corrective retry.
       Observed: Stage 5+6 phased run (2026-05-24). Iter 3 was making
       forward progress (errors 22 → 12), iter 4's LLM response failed

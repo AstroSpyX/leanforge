@@ -1075,4 +1075,133 @@ theorem third_isomorphism_theorem {G : Type}
   have _ := hNK
   trivial
 
+theorem pow_zero (a : G) : mypow Γ a 0 = e := rfl
+
+theorem pow_succ (a : G) (n : Nat) : mypow Γ a (n + 1) = mypow Γ a n * a := rfl
+
+theorem pow_one (a : G) : mypow Γ a 1 = a := by
+  simp [mypow]
+
+theorem pow_two (a : G) : mypow Γ a 2 = a * a := by
+  simp [mypow]
+
+def myipow (a : G) : Int → G
+  | Int.ofNat n => mypow Γ a n
+  | Int.negSucc n => (mypow Γ a (n + 1))⁻¹
+
+theorem ipow_zero (a : G) : myipow Γ a 0 = e := rfl
+
+theorem ipow_one (a : G) : myipow Γ a 1 = a := by
+  exact pow_one Γ a
+
+theorem ipow_neg (a : G) (n : Int) : myipow Γ a (-n) = (myipow Γ a n)⁻¹ := by
+  cases n with
+  | ofNat k =>
+    cases k with
+    | zero => 
+      show myipow Γ a 0 = (myipow Γ a 0)⁻¹
+      simp [myipow, mypow]
+    | succ m => rfl
+  | negSucc k =>
+    show myipow Γ a (Int.ofNat (k + 1)) = (myipow Γ a (Int.negSucc k))⁻¹
+    simp [myipow, inv_inv]
+
+theorem pow_comm (a : G) (m n : Nat) : mypow Γ a m * mypow Γ a n = mypow Γ a n * mypow Γ a m := by
+  have h : a * a = a * a := rfl
+  have h1 : a * mypow Γ a n = mypow Γ a n * a := (commute_pow Γ a a h n).symm
+  exact commute_pow Γ a (mypow Γ a n) h1 m
+
+theorem commute_inv_right (x y : G) (h : x * y = y * x) : x * y⁻¹ = y⁻¹ * x := by
+  calc x * y⁻¹ = e * (x * y⁻¹) := by rw [Γ.e_left]
+    _ = (y⁻¹ * y) * (x * y⁻¹) := by rw [Γ.inv_left]
+    _ = y⁻¹ * (y * (x * y⁻¹)) := by rw [Γ.assoc]
+    _ = y⁻¹ * ((y * x) * y⁻¹) := by rw [← Γ.assoc y x]
+    _ = y⁻¹ * ((x * y) * y⁻¹) := by rw [h]
+    _ = y⁻¹ * (x * (y * y⁻¹)) := by rw [Γ.assoc x y]
+    _ = y⁻¹ * (x * e) := by rw [Γ.inv_right]
+    _ = y⁻¹ * x := by rw [Γ.e_right]
+
+theorem ipow_add_mixed (a : G) (pm pn : Nat) :
+    myipow Γ a (Int.ofNat pm + Int.negSucc pn) = mypow Γ a pm * (mypow Γ a (pn + 1))⁻¹ := by
+  induction pm generalizing pn with
+  | zero =>
+    simp [myipow, pow_zero]
+  | succ k ih =>
+    cases pn with
+    | zero =>
+      have h_arg : Int.ofNat (k + 1) + Int.negSucc 0 = Int.ofNat k := by omega
+      have h_rhs : mypow Γ a (k + 1) * (mypow Γ a 1)⁻¹ = mypow Γ a k := by
+        simp only [mypow]
+        rw [Γ.e_left]
+        rw [Γ.assoc, Γ.inv_right, Γ.e_right]
+      rw [h_arg, h_rhs]
+      rfl
+    | succ d =>
+      have h_eq : mypow Γ a (k + 1) * (mypow Γ a (d + 1 + 1))⁻¹ = mypow Γ a k * (mypow Γ a (d + 1))⁻¹ := by
+        simp only [mypow]
+        rw [inv_op]
+        calc mypow Γ a k * a * (a⁻¹ * (mypow Γ a (d + 1))⁻¹)
+          _ = mypow Γ a k * (a * (a⁻¹ * (mypow Γ a (d + 1))⁻¹)) := Γ.assoc _ _ _
+          _ = mypow Γ a k * ((a * a⁻¹) * (mypow Γ a (d + 1))⁻¹) := by rw [← Γ.assoc a a⁻¹]
+          _ = mypow Γ a k * (e * (mypow Γ a (d + 1))⁻¹) := by rw [Γ.inv_right]
+          _ = mypow Γ a k * (mypow Γ a (d + 1))⁻¹ := by rw [Γ.e_left]
+      have h_index : Int.ofNat (k + 1) + Int.negSucc (d + 1) = Int.ofNat k + Int.negSucc d := by omega
+      rw [h_index, h_eq]
+      exact ih d
+
+theorem ipow_add (a : G) (m n : Int) : myipow Γ a (m + n) = myipow Γ a m * myipow Γ a n := by
+  cases m with
+  | ofNat pm =>
+    cases n with
+    | ofNat pn =>
+      have h_add : Int.ofNat pm + Int.ofNat pn = Int.ofNat (pm + pn) := rfl
+      rw [h_add]
+      show mypow Γ a (pm + pn) = mypow Γ a pm * mypow Γ a pn
+      rw [pow_add]
+    | negSucc pn =>
+      exact ipow_add_mixed Γ a pm pn
+  | negSucc pm =>
+    cases n with
+    | ofNat pn =>
+      have hcomm : Int.negSucc pm + Int.ofNat pn = Int.ofNat pn + Int.negSucc pm := by
+        simp [Int.add_comm]
+      rw [hcomm]
+      rw [ipow_add_mixed Γ a pn pm]
+      exact commute_inv_right Γ (mypow Γ a pn) (mypow Γ a (pm + 1)) (pow_comm Γ a pn (pm + 1))
+    | negSucc pn =>
+      have hLHS : Int.negSucc pm + Int.negSucc pn = Int.negSucc (pm + pn + 1) := rfl
+      rw [hLHS]
+      show (mypow Γ a (pm + pn + 1 + 1))⁻¹ = (mypow Γ a (pm + 1))⁻¹ * (mypow Γ a (pn + 1))⁻¹
+      have h_add : pm + pn + 1 + 1 = (pn + 1) + (pm + 1) := by omega
+      have h_pow : mypow Γ a (pm + pn + 1 + 1) = mypow Γ a (pn + 1) * mypow Γ a (pm + 1) := by
+        rw [h_add, pow_add]
+      rw [h_pow, inv_op]
+
+def cyclic_subgroup_as_subgroup (a : G) : MySubgroup Γ :=
+  { carrier := fun x => ∃ n : Int, x = myipow Γ a n,
+    e_mem := ⟨0, by rw [ipow_zero]⟩,
+    op_closed := fun {x y} ⟨m, hm⟩ ⟨n, hn⟩ => ⟨m + n, by
+      rw [hm, hn, ipow_add]⟩,
+    inv_closed := fun {x} ⟨n, hn⟩ => ⟨-n, by
+      rw [hn, ipow_neg]⟩ }
+
+theorem commute_pow_self (a : G) (n : Nat) : a * mypow Γ a n = mypow Γ a n * a := by
+  induction n with
+  | zero =>
+    simp [mypow]
+  | succ k ih =>
+    simp only [mypow]
+    rw [← Γ.assoc, ih]
+
+theorem commute_mul_pow (a b : G) (h : a * b = b * a) (n : Nat) :
+    mypow Γ (a * b) n = mypow Γ a n * mypow Γ b n := by
+  induction n with
+  | zero =>
+    simp [mypow]
+  | succ k ih =>
+    simp only [mypow]
+    rw [ih]
+    have h_comm : mypow Γ b k * a = a * mypow Γ b k := commute_pow Γ b a h.symm k
+    rw [Γ.assoc, ← Γ.assoc (mypow Γ b k) a b, h_comm, Γ.assoc a, ← Γ.assoc]
+
 end

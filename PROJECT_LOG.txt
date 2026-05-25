@@ -5,6 +5,176 @@
 
 
 -------
+2026-05-24 — discovery — Bug class: deterministic-temp + cache + identical prompt = unbreakable stuck loop
+-------
+
+  Surfaced during the Phase 3 (integer powers + cyclic groups) run.
+  21 iters logged, $0.82 spent, 12/12 named declarations landed,
+  but 2 Lean errors remained in a helper theorem ipow_add_mixed
+  (the agent's auxiliary for the mixed-sign case of integer-power
+  addition). The errors came from the `omega` tactic failing on
+  subgoals involving Int.ofNat casts.
+
+  What made it unrecoverable, mechanically:
+    Iters 11-15: agent emitted the same broken ipow_add_mixed
+      across attempts. recent_failures memo was present but not
+      strong enough to force a different approach. Each iter
+      cost ~$0.05.
+    Iters 16-20: prompt was byte-identical to a prior iter →
+      llm/.cache hit → cached (broken) response returned for
+      $0.00 → same edits → same Lean errors → same prompt → loop.
+      The framework's loop detection should have caught this but
+      apparently didn't (state_hash either drifted in a small
+      way iter-to-iter, or LOOP_DETECTION_WINDOW=5 was set just
+      wide enough to miss the 5-iter repeat).
+
+  The root cause is NOT the cache. It is temperature=0 +
+  identical prompts = deterministic responses. The cache merely
+  amortizes (and obscures) what is already deterministic.
+  Removing the cache would have made each iter cost ~$0.05
+  instead of $0.00 without changing the outcome.
+
+  What actually breaks a stuck loop:
+    - Change the response: bump temperature (e.g., 0 → 0.5) on
+      detected repeats
+    - Change the model: escalate to a stronger model for rescue
+      iters
+    - Change the prompt: make the recent-failures memo say
+      "you've tried X 4 times — STOP and try Y" explicitly
+
+  Defense ladder (ordered for our codebase; details in
+  IMPROVEMENTS.txt):
+    1. Don't cache responses that produce Lean errors
+       (infrastructure — required to unlock 3 and 4 below; alone
+       does not help since temp=0 makes fresh calls equally
+       broken)
+    2. Verify and fix loop detection so state-hash repeats
+       trigger LOOP_DETECTED exit
+    3. Stronger recent-failures memo (changes prompt → changes
+       response, even at temp=0)
+    4. Temperature bump on detected repeat (requires #1)
+    5. Auto-escalate model on detected repeat
+    6. Pause-fallback in auto mode (the pause.py infrastructure
+       exists but is only wired into mode=step)
+
+  None are implemented yet. The Phase 3 run is the first
+  empirical evidence that gemini-flash CAN get into this state
+  and the framework can't escape.
+
+  Files: no code change in this entry — discovery + improvements
+  backlog. The 2-error helper in Group.lean is the artifact.
+
+
+-------
+2026-05-24 — milestone — Group.lean Phase 2 (closure operator on subgroup_generated_by) — 4 thms, 2 iters, $0.077
+-------
+
+  Tasks landed: subset_generated, generated_le, generated_mono,
+  generated_idempotent. The latter is the lattice-theoretic
+  idempotence of the generated() closure operator, expressed as
+  set equality and proven by funext + propext.
+
+  Notable agent behavior:
+    - Cross-theorem composition: generated_idempotent invokes
+      generated_le AND subset_generated. The agent recognized
+      the building blocks already existed and chained them.
+    - The proof of TASK 2.4 mirrored the natural-language sketch
+      in the goal text exactly — the agent took the math hint
+      and translated it into Lean structure.
+
+  Per-theorem cost: ~$0.019. Two-iter convergence: iter 1
+  regression (2 errors), iter 2 clean success.
+
+  Files: examples/scratch/Scratch/Group.lean.
+
+
+-------
+2026-05-24 — milestone — Group.lean Phase 3 (integer powers + cyclic groups + commute lemmas) — 12 decls in 21 iters, $0.82, 2 errors remain
+-------
+
+  Tasks attempted in reordered logical sequence: 3.3 (myipow +
+  integer-power laws) before 3.1 (cyclic_subgroup_as_subgroup,
+  which needs integer powers for inverse closure).
+
+  Results: 12/12 named declarations present in the file
+  (def myipow, ipow_zero, ipow_one, ipow_neg, ipow_add,
+  pow_zero, pow_one, pow_two, pow_succ,
+  cyclic_subgroup_as_subgroup, commute_pow_self,
+  commute_mul_pow). File has 2 Lean errors at end-of-run, both
+  in an agent-introduced helper theorem ipow_add_mixed (lines
+  1124-1147) used internally by ipow_add for the mixed-sign
+  cases. The helper relies on Lean's `omega` tactic, which
+  cannot discharge specific subgoals involving Int.ofNat casts.
+
+  Run quality:
+    iter 1-7: real progress (7 errors → 2 errors)
+    iter 8-15: stuck thrashing on the same 2 helper errors
+    iter 16-20: cache hits, $0.00 per iter, identical broken
+      responses — the framework couldn't escape (see discovery
+      entry above for the architectural analysis)
+
+  Cost: $0.82 total (would have been higher without the cache
+  amortization of iters 16-20, though that amortization is
+  what trapped the loop).
+
+  Status: progress, not success. Manual finish for the helper
+  is straightforward (~5 min); the agent's ipow_add_mixed has
+  the right SHAPE but wrong tactic choice. Either rewrite the
+  omega calls to use explicit Int.ofNat_add / cast manipulation,
+  or restructure ipow_add to avoid the mixed-sign helper
+  entirely.
+
+  Files: examples/scratch/Scratch/Group.lean.
+
+
+-------
+2026-05-24 — milestone — Group.lean Phase 1 (subgroup lattice basics) — 8 decls, 2 iters, $0.083
+-------
+
+  Tasks: subgroup_le def, subgroup_le_refl / _trans / _antisymm
+  (uses TASK 0.3's subgroup_ext), trivial_subgroup +
+  trivial_le_subgroup (minimality), top_subgroup +
+  subgroup_le_top (maximality).
+
+  iter 1 regression (5 errors) → iter 2 success. Per-decl cost:
+  ~$0.010. Cheapest-per-decl run of the session.
+
+  Notable: the agent put Γ as an explicit first arg on all the
+  new decls (matching the section auto-binding convention), so
+  callers write `subgroup_le Γ H K` rather than `subgroup_le H K`.
+
+  Files: examples/scratch/Scratch/Group.lean.
+
+
+-------
+2026-05-24 — milestone — Group.lean TASK 0.2 + 0.3 (@[simp] attrs + extensionality) — 5 items, judge-driven
+-------
+
+  Tasks landed via judge-driven loop (no `sorry` triggers — the
+  judge stage alone drove iteration):
+    - TASK 0.2: @[simp] on MyGroup.e_left/e_right/inv_left/
+      inv_right (via attribute directive) + inv_inv + inv_e
+      (decorated theorems)
+    - TASK 0.3: subgroup_ext theorem, hom_ext theorem (both with
+      real proofs)
+
+  Initial run got stuck in a sig-preservation/judge oscillation:
+  goal text specified explicit binders (to dodge shell-escaping
+  on `Γ`); baseline file already had the theorems with implicit
+  binders from a prior partial run; agent kept toggling between
+  the two, signature_preservation flagged the regression every
+  iter. Resolved by softening the goal text to accept either
+  binder style ("if these theorems already exist, leave them
+  alone"). One iter later: SUCCESS.
+
+  Cost: ~$0.04 total. Validates the judge-as-trigger pattern
+  for refactor-and-addition tasks where there's no sorry to
+  drive the loop.
+
+  Files: examples/scratch/Scratch/Group.lean.
+
+
+-------
 2026-05-24 — milestone — Group.lean notation refactor (TASK 0.1) end-to-end via the full v1.2.0 stack
 -------
 
