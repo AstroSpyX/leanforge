@@ -60,8 +60,8 @@ theorem left_cancel {G : Type} (Γ : MyGroup G)
 -- a^n: the group operation applied n times, with the new factor
 -- appended on the right. a^0 = e by convention.
 def mypow {G : Type} (Γ : MyGroup G) (a : G) : Nat → G
-  | 0     => Γ.e
-  | n + 1 => Γ.op (mypow Γ a n) a
+  | 0     => e
+  | n + 1 => mypow Γ a n * a
 
 -- Laws of exponents: a^(m + n) = a^m · a^n.
 theorem pow_add {G : Type} (Γ : MyGroup G) (a : G) (m n : Nat) :
@@ -180,16 +180,16 @@ theorem commute_pow {G : Type} (Γ : MyGroup G)
 -- A subgroup of G.
 structure MySubgroup {G : Type} (Γ : MyGroup G) where
   carrier : Set G
-  e_mem : carrier Γ.e
+  e_mem : carrier e
   op_closed :
     ∀ {a b : G},
       carrier a →
       carrier b →
-      carrier (Γ.op a b)
+      carrier (a * b)
   inv_closed :
     ∀ {a : G},
       carrier a →
-      carrier (Γ.inv a)
+      carrier (a⁻¹)
 
 
 -- Membership notation for subgroups.
@@ -326,7 +326,7 @@ def left_coset {G : Type}
     (a : G) : Set G :=
   fun x => ∃ h : G,
     H.carrier h ∧
-    x = Γ.op a h
+    x = a * h
 
 
 -- Normal subgroup.
@@ -335,10 +335,7 @@ def normal_subgroup {G : Type}
     (H : MySubgroup Γ) : Prop :=
   ∀ g h : G,
     H.carrier h →
-    H.carrier
-      (Γ.op
-        (Γ.op g h)
-        (Γ.inv g))
+    H.carrier (g * h * g⁻¹)
 
 
 -- ─────────────────────────────────────────────────────────────────────
@@ -450,7 +447,7 @@ structure MyEquivalence {α : Type} (R : Relation α) : Prop where
 def same_left_coset {G : Type}
     (Γ : MyGroup G)
     (H : MySubgroup Γ) : Relation G :=
-  fun a b => H.carrier (Γ.op (Γ.inv a) b)
+  fun a b => H.carrier (a⁻¹ * b)
 
 
 theorem same_left_coset_refl {G : Type}
@@ -494,7 +491,7 @@ def same_left_coset_equiv {G : Type}
 def same_right_coset {G : Type}
     (Γ : MyGroup G)
     (H : MySubgroup Γ) : Relation G :=
-  fun a b => H.carrier (Γ.op a (Γ.inv b))
+  fun a b => H.carrier (a * b⁻¹)
 
 
 def same_right_coset_equiv {G : Type}
@@ -528,7 +525,7 @@ def right_coset {G : Type}
     {Γ : MyGroup G}
     (H : MySubgroup Γ)
     (a : G) : Set G :=
-  fun x => ∃ h : G, H.carrier h ∧ x = Γ.op h a
+  fun x => ∃ h : G, H.carrier h ∧ x = h * a
 
 
 -- Two left cosets are equal iff their representatives are in the same coset.
@@ -628,12 +625,12 @@ theorem right_cosets_partition {G : Type}
     obtain ⟨k1, hk1, hx1⟩ := hxa
     obtain ⟨k2, hk2, hx2⟩ := hxb
     simp only [same_right_coset]
-    have heq12 : Γ.op k1 a = Γ.op k2 b := by rw [← hx1, ← hx2]
-    have hk : H.carrier (Γ.op (Γ.inv k1) k2) := H.op_closed (H.inv_closed hk1) hk2
-    have hval : Γ.op a (Γ.inv b) = Γ.op (Γ.inv k1) k2 := by
+    have heq12 : k1 * a = k2 * b := by rw [← hx1, ← hx2]
+    have hk : H.carrier (k1⁻¹ * k2) := H.op_closed (H.inv_closed hk1) hk2
+    have hval : a * b⁻¹ = k1⁻¹ * k2 := by
       apply left_cancel Γ k1
-      rw [← Γ.assoc k1 a (Γ.inv b), heq12, Γ.assoc k2 b (Γ.inv b), Γ.inv_right, Γ.e_right,
-          ← Γ.assoc k1 (Γ.inv k1) k2, Γ.inv_right, Γ.e_left]
+      rw [← Γ.assoc k1 a b⁻¹, heq12, Γ.assoc k2 b b⁻¹, Γ.inv_right, Γ.e_right,
+          ← Γ.assoc k1 k1⁻¹ k2, Γ.inv_right, Γ.e_left]
     rw [hval]
     exact hk
 
@@ -653,23 +650,23 @@ theorem normal_iff_cosets_equal {G : Type}
     simp only [left_coset, right_coset]
     constructor
     · rintro ⟨h, hh, hx⟩
-      refine ⟨Γ.op (Γ.op a h) (Γ.inv a), hN a h hh, ?_⟩
+      refine ⟨(a * h) * a⁻¹, hN a h hh, ?_⟩
       rw [hx]
-      rw [Γ.assoc (Γ.op a h) (Γ.inv a) a, Γ.inv_left, Γ.e_right]
+      rw [Γ.assoc (a * h) a⁻¹ a, Γ.inv_left, Γ.e_right]
     · rintro ⟨h, hh, hx⟩
-      have hh' : H.carrier (Γ.op (Γ.op (Γ.inv a) h) (Γ.inv (Γ.inv a))) := hN (Γ.inv a) h hh
+      have hh' : H.carrier ((a⁻¹ * h) * (a⁻¹)⁻¹) := hN a⁻¹ h hh
       rw [inv_inv] at hh'
-      have hh'' : H.carrier (Γ.op (Γ.inv a) (Γ.op h a)) := by
+      have hh'' : H.carrier (a⁻¹ * (h * a)) := by
         rw [← Γ.assoc]; exact hh'
-      refine ⟨Γ.op (Γ.inv a) (Γ.op h a), hh'', ?_⟩
-      rw [hx, ← Γ.assoc a (Γ.inv a) (Γ.op h a), Γ.inv_right, Γ.e_left]
+      refine ⟨a⁻¹ * (h * a), hh'', ?_⟩
+      rw [hx, ← Γ.assoc a a⁻¹ (h * a), Γ.inv_right, Γ.e_left]
   · intro hcosets g h hh
-    have hmem2 : left_coset H g (Γ.op g h) := ⟨h, hh, rfl⟩
+    have hmem2 : left_coset H g (g * h) := ⟨h, hh, rfl⟩
     rw [hcosets g] at hmem2
     obtain ⟨k2, hk2, hk2eq⟩ := hmem2
-    have hk2val : k2 = Γ.op (Γ.op g h) (Γ.inv g) := by
+    have hk2val : k2 = (g * h) * g⁻¹ := by
       apply right_cancel Γ g
-      rw [← hk2eq, Γ.assoc (Γ.op g h) (Γ.inv g) g, Γ.inv_left, Γ.e_right]
+      rw [← hk2eq, Γ.assoc (g * h) g⁻¹ g, Γ.inv_left, Γ.e_right]
     rw [← hk2val]; exact hk2
 
 
@@ -684,7 +681,8 @@ theorem normal_iff_cosets_equal {G : Type}
 theorem normal_iff_conjugation {G : Type}
     (Γ : MyGroup G) (H : MySubgroup Γ) :
     normal_subgroup Γ H ↔
-    ∀ g h : G, H.carrier h → H.carrier (Γ.op (Γ.op g h) (Γ.inv g)) := by
+    ∀ g h : G, H.carrier h → H.carrier (Γ.op (Γ.op g h) (Γ.inv g))
+  := by
   simp only [normal_subgroup]
 
 
@@ -723,20 +721,21 @@ theorem quotient_mul_well_defined {G : Type}
     (hN : normal_subgroup Γ H)
     (a a' b b' : G)
     (ha : same_left_coset Γ H a a') (hb : same_left_coset Γ H b b') :
-    same_left_coset Γ H (Γ.op a b) (Γ.op a' b'):= by
+    same_left_coset Γ H (Γ.op a b) (Γ.op a' b')
+  := by
   simp only [same_left_coset] at *
   rw [inv_op]
-  have hconj : H.carrier (Γ.op (Γ.op (Γ.inv b) (Γ.op (Γ.inv a) a')) b) := by
-    have := hN (Γ.inv b) _ ha
+  have hconj : H.carrier ((b⁻¹ * (a⁻¹ * a')) * b) := by
+    have := hN b⁻¹ _ ha
     rwa [inv_inv] at this
-  have key : Γ.op (Γ.op (Γ.inv b) (Γ.inv a)) (Γ.op a' b') =
-             Γ.op (Γ.op (Γ.op (Γ.inv b) (Γ.op (Γ.inv a) a')) b) (Γ.op (Γ.inv b) b') := by
-    rw [Γ.assoc (Γ.inv b) (Γ.inv a) (Γ.op a' b')]
-    rw [← Γ.assoc (Γ.inv a) a' b']
-    rw [← Γ.assoc (Γ.inv b) (Γ.op (Γ.inv a) a') b']
-    rw [Γ.assoc (Γ.op (Γ.inv b) (Γ.op (Γ.inv a) a')) b (Γ.op (Γ.inv b) b')]
+  have key : (b⁻¹ * a⁻¹) * (a' * b') =
+             ((b⁻¹ * (a⁻¹ * a')) * b) * (b⁻¹ * b') := by
+    rw [Γ.assoc b⁻¹ a⁻¹ (a' * b')]
+    rw [← Γ.assoc a⁻¹ a' b']
+    rw [← Γ.assoc b⁻¹ (a⁻¹ * a') b']
+    rw [Γ.assoc (b⁻¹ * (a⁻¹ * a')) b (b⁻¹ * b')]
     congr 1
-    rw [← Γ.assoc b (Γ.inv b) b', Γ.inv_right, Γ.e_left]
+    rw [← Γ.assoc b b⁻¹ b', Γ.inv_right, Γ.e_left]
   rw [key]
   exact H.op_closed hconj hb
 
@@ -760,7 +759,7 @@ def quotient_mul {G : Type}
     MyQuotient G (quotient_rel Γ H) :=
     Quot.lift
     (fun a => Quot.lift
-      (fun b => Quot.mk (quotient_rel Γ H) (Γ.op a b))
+      (fun b => Quot.mk (quotient_rel Γ H) (a * b))
       (fun b b' hb => Quot.sound (quotient_mul_well_defined Γ H hN a a b b'
         (same_left_coset_refl Γ H a) hb)))
     (fun a a' ha => by
@@ -779,14 +778,14 @@ def quotient_inverse {G : Type}
     MyQuotient G (quotient_rel Γ H) →
     MyQuotient G (quotient_rel Γ H) :=
   Quot.lift
-    (fun a => Quot.mk (quotient_rel Γ H) (Γ.inv a))
+    (fun a => Quot.mk (quotient_rel Γ H) (a⁻¹))
     (fun a a' ha => by
       apply Quot.sound
       simp only [quotient_rel, same_left_coset] at *
-      have h1 : H.carrier (Γ.inv (Γ.op (Γ.inv a) a')) := H.inv_closed ha
+      have h1 : H.carrier ((a⁻¹ * a')⁻¹) := H.inv_closed ha
       rw [inv_op, inv_inv] at h1
       have h2 := hN a' _ h1
-      rw [← Γ.assoc a' (Γ.inv a') a, Γ.inv_right, Γ.e_left] at h2
+      rw [← Γ.assoc a' a'⁻¹ a, Γ.inv_right, Γ.e_left] at h2
       rw [inv_inv]
       exact h2)
 
@@ -796,7 +795,7 @@ def quotient_identity {G : Type}
     (Γ : MyGroup G)
     (H : MySubgroup Γ) :
     MyQuotient G (quotient_rel Γ H) :=
-  Quot.mk (quotient_rel Γ H) Γ.e
+  Quot.mk (quotient_rel Γ H) e
 
 
 def quotient_is_group {G : Type}
@@ -812,18 +811,18 @@ def quotient_is_group {G : Type}
       refine Quot.inductionOn qa (fun a => ?_)
       refine Quot.inductionOn qb (fun b => ?_)
       refine Quot.inductionOn qc (fun c => ?_)
-      show Quot.mk (quotient_rel Γ H) (Γ.op (Γ.op a b) c) =
-           Quot.mk (quotient_rel Γ H) (Γ.op a (Γ.op b c))
+      show Quot.mk (quotient_rel Γ H) ((a * b) * c) =
+           Quot.mk (quotient_rel Γ H) (a * (b * c))
       rw [Γ.assoc],
     e_left := by
       intro qa
       refine Quot.inductionOn qa (fun a => ?_)
-      show Quot.mk (quotient_rel Γ H) (Γ.op Γ.e a) = Quot.mk (quotient_rel Γ H) a
+      show Quot.mk (quotient_rel Γ H) (e * a) = Quot.mk (quotient_rel Γ H) a
       rw [Γ.e_left],
     e_right := by
       intro qa
       refine Quot.inductionOn qa (fun a => ?_)
-      show Quot.mk (quotient_rel Γ H) (Γ.op a Γ.e) = Quot.mk (quotient_rel Γ H) a
+      show Quot.mk (quotient_rel Γ H) (a * e) = Quot.mk (quotient_rel Γ H) a
       rw [Γ.e_right],
     inv_left := by
       intro qa
@@ -926,7 +925,7 @@ theorem first_isomorphism_theorem {G H : Type}
 def subgroup_product {G : Type}
     {Γ : MyGroup G}
     (A B : MySubgroup Γ) : Set G :=
-  fun x => ∃ a b : G, A.carrier a ∧ B.carrier b ∧ x = Γ.op a b
+  fun x => ∃ a b : G, A.carrier a ∧ B.carrier b ∧ x = a * b
 
 
 -- Second isomorphism theorem (aspirational): if A is a subgroup and B

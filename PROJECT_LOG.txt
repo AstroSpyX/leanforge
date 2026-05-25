@@ -5,6 +5,86 @@
 
 
 -------
+2026-05-24 — milestone — Group.lean notation refactor (TASK 0.1) end-to-end via the full v1.2.0 stack
+-------
+
+  First refactor-class task (vs. fill-the-sorry) completed end-to-end
+  by the agent. Goal: introduce scoped `*` / `⁻¹` / `e` notation
+  inside a section and rewrite every proof body to use it, while
+  preserving every theorem signature byte-for-byte.
+
+  Result: SUCCESS in 4 iterations, $0.1730 total, zero apply_edits
+  failures. The remaining 19 occurrences of `Γ.op` / `Γ.inv` / `Γ.e`
+  in the file are all in theorem signatures (which the goal forbids
+  touching) or the notation declarations themselves — proof bodies
+  are fully refactored.
+
+    iter 0: baseline — 48 patterns in proof bodies (file was partially
+            refactored from a prior failed run).
+    iter 1: 24 patterns fixed → 24 remaining. Cost $0.046.
+    iter 2: 4 more fixed → 20 remaining (just under cap threshold).
+            Cost $0.045.
+    iter 3: remaining patterns either in signatures (correctly skipped
+            by pattern_absent body-detection) or fixed. Style stage
+            passed; judge engaged. Cost $0.034.
+    iter 4: judge confirmed completion. SUCCESS. Cost $0.049.
+
+  What this validates:
+    Five layers of v1.x improvements worked simultaneously for the
+    first time on a real task that exercises all of them:
+
+      1. v1.1.0 tool-use cutover — every iter's call was a clean
+         strict-tool-use submit_fix invocation. Zero JSON parsing
+         failures, zero schema validation errors.
+      2. v1.1.0 Gemini provider — gemini-flash as worker,
+         gemini-flash-lite as judge. Both Gemini SDK + the compat
+         transforms (const→enum, additionalProperties strip) held up.
+      3. v1.2.0 checker framework — three stages (syntax, policy,
+         style) ran every iter; intent stage (judge) only ran once
+         style stage passed. Short-circuit avoided judge cost until
+         the agent was actually close to done.
+      4. v1.2.0 pattern_absent cap — surfaced 20+1 pseudo-diagnostics
+         per iter; agent worked through them in batches without
+         being overwhelmed.
+      5. v1.2.0 replace_text edit kind + prompt-v4 nudges — agent
+         constructed `find_text` reliably (mostly single-line,
+         distinctive); zero coord-drift failures, zero find-text-
+         not-present failures during the productive iters.
+
+    Combined effect: $0.003/pattern, which is roughly 60x cheaper
+    than the per-sorry rate on the harder Stage 5+6 proof runs.
+    Refactor work is fundamentally cheaper than proof construction
+    because each edit is a local mechanical transform, not a search
+    through the space of valid Lean proofs.
+
+  What broke earlier (now fixed):
+    Three failed attempts at this same task before the framework was
+    complete:
+      - Attempt 1 (pre-cap): 169 patterns surfaced at once →
+        gemini-flash made mass-edit attempts that hit coord-drift
+        apply_edits failures ~40% of iters → spent ~$0.40 making
+        minimal progress.
+      - Attempt 2 (with cap, pre-replace_text): cap to 20 helped
+        but coord arithmetic on Unicode-heavy lines kept failing.
+      - Attempt 3 (with replace_text, pre-prompt-v4): no more coord
+        drift but the agent's multi-line find_text often diverged
+        from the file by a space or two; "find_text not present"
+        replaced the old coord-drift failures.
+
+    The prompt-v4 nudge (COPY don't reconstruct; prefer short single-
+    line distinctive snippets; split multi-line replacements) was
+    the final piece. Free, no code change, immediate effect.
+
+  Branch state:
+    checker-framework — ready to merge to main but not merged
+    (user's choice). All v1.2.0 work (checker framework + cap +
+    replace_text + summary logs + prompt-v4) plus this Group.lean
+    artifact lives there.
+
+  Files: examples/scratch/Scratch/Group.lean.
+
+
+-------
 2026-05-24 — v1.2.0 — pluggable checker framework (deterministic + LLM judge)
 -------
 
