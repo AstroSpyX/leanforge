@@ -20,8 +20,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
-PROMPT_VERSION_REPAIR = "repair_v3"
-PROMPT_VERSION_GENERATE = "generate_v3"
+PROMPT_VERSION_REPAIR = "repair_v4"
+PROMPT_VERSION_GENERATE = "generate_v4"
 
 LEAN_TOOLCHAIN_PIN = "Lean 4.29.1, Mathlib v4.29.1"
 MAX_CHANGED_LINES_DEFAULT = 30
@@ -89,6 +89,27 @@ EDIT RULES.
   Do NOT remove any declaration that existed at the start.
 - Preserve theorem statements (the part before `:= ...`). Refactoring
   a statement is rejected by default.
+
+CONSTRUCTING `find_text` RELIABLY.
+- COPY `find_text` from the file content shown above, character for
+  character — DO NOT reconstruct it from memory. Including:
+  leading whitespace (count the spaces), exact identifier names,
+  exact Unicode glyphs. Even one extra/missing space → no match →
+  the edit fails and the iter wastes its call.
+- PREFER short, distinctive `find_text` over long multi-line
+  blocks. A unique single-line snippet like
+  `  rw [Γ.op a b, Γ.inv_left]` is much more reliable than a
+  6-line proof body. The shorter the find_text, the less surface
+  for whitespace drift.
+- When you need to change MANY lines, do it as MULTIPLE small
+  replace_text edits in the same response, each anchored to its
+  own unique single line. Don't pack a whole proof body into one
+  find_text — every additional line is another chance for a
+  byte-exact match to fail.
+- If your edit fails with "find_text not present in file," the
+  next iter's prompt will show the soft_warning. Read the file
+  content again carefully — the line is almost always THERE but
+  with whitespace you didn't replicate.
 
 INTENDED_SCOPE.
 Declare every top-level decl you plan to modify. The controller
