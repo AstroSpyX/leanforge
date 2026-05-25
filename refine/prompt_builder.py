@@ -1,16 +1,16 @@
-"""Build the system + user messages refine sends to ask_llm.
+"""Build the system + user messages refine sends to `llm.ask`.
 
 Two builders, one per loop mode:
 
   - build_repair_messages: REPAIR turn (file + diagnostics + memos)
   - build_generation_messages: GENERATION turn (goal only, no diagnostics)
 
-Both return `(prompt, system, prefill, prompt_version)`. Callers pass
-these straight to ask_llm(prompt=…, system_override=system,
-prefill=prefill, …). Prefill is always `"{"` so the model is locked
-into emitting valid JSON from the first byte.
+Both return `(prompt, system, prompt_version)`. Callers pass these to
+`ask(prompt, system=system, tools=[SUBMIT_FIX_TOOL],
+tool_choice="submit_fix", ...)`. Structured output is enforced
+server-side by the tool's strict schema — no prose-extraction needed.
 
-The system prompt is intentionally long (~1.5k tokens) so Anthropic's
+The system prompt is intentionally long (~1.2k tokens) so Anthropic's
 prompt cache kicks in across iterations — most repair runs reuse the
 same system text with a changing user payload.
 """
@@ -20,14 +20,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
-PROMPT_VERSION_REPAIR = "repair_v1"
-PROMPT_VERSION_GENERATE = "generate_v1"
-# Assistant prefill is unsupported on current Anthropic models (Sonnet 4.6,
-# Opus 4.7, Haiku 4.5 reject messages ending with assistant role with HTTP
-# 400). We rely on system-prompt discipline + JSON extraction + Pydantic
-# validation + corrective retry. Prefill stays in the API surface as None
-# so a future model can re-enable it without renaming the field.
-ASSISTANT_PREFILL: str | None = None
+PROMPT_VERSION_REPAIR = "repair_v2"
+PROMPT_VERSION_GENERATE = "generate_v2"
 
 LEAN_TOOLCHAIN_PIN = "Lean 4.29.1, Mathlib v4.29.1"
 MAX_CHANGED_LINES_DEFAULT = 30
@@ -43,71 +37,50 @@ theorem statements and respecting the rules below.
 
 Toolchain: {LEAN_TOOLCHAIN_PIN}.
 
-OUTPUT FORMAT — STRICT.
-You MUST output a single JSON object that conforms to the schema below.
-No markdown. No prose. No text before the opening `{{` or after the
-closing `}}`. The first byte of your response is `{{`.
+OUTPUT.
+Call the `submit_fix` tool. The tool's schema enforces field types
+and structure server-side — you do not need to format JSON manually.
 
-SCHEMA:
-{{
-  "summary":            string,             // one short line
-  "strategy":           string,             // RepairStrategy enum value
-  "reasoning":          string,             // 1-3 sentences
-  "confidence":         number,             // 0.0 .. 1.0
-  "intended_scope":     [ScopeItem],
-  "fixes":              [Fix],
-  "remaining_blockers": [string]            // diagnostic IDs as strings, e.g. ["2","5"]
-}}
+POSITIONS.
+All `range` positions are 0-indexed LSP convention. `character` is a
+UTF-16 code unit count, not a code-point count. ASCII and most Lean
+Unicode (∀, ∃, →, ⟨, ⟩, ↦) is 1 UTF-16 unit; characters outside the
+BMP take 2.
 
-ScopeItem:
-  {{ "name": string, "range": Range | null }}
-
-Fix:
-  {{ "diagnostic_ids": [int], "edits": [Edit] }}
-
-Edit:
-  {{ "kind": "replace_range", "range": Range, "replacement": string }}
-
-Range:
-  {{ "start": {{ "line": int, "character": int }},
-     "end":   {{ "line": int, "character": int }} }}
-
-  Positions are 0-indexed LSP convention. `character` is a UTF-16 code
-  unit count, not a code-point count. ASCII and most Lean Unicode
-  (∀, ∃, →, ⟨, ⟩, ↦) is 1 UTF-16 unit; characters outside the BMP take 2.
-
-RepairStrategy values:
+REPAIR STRATEGIES.
+Pick the most specific applicable `strategy` value:
   import_fix, namespace_fix, tactic_rewrite, theorem_specialization,
   type_annotation_fix, coercion_fix, induction_repair, rewrite_chain_fix,
   generation, other.
 
-EDIT RULES:
-- `replace_range` is the only operation. Insert = zero-width range;
+EDIT RULES.
+- `replace_range` is the only edit kind. Insert = zero-width range;
   delete = empty replacement; full rewrite = (0,0)..(EOF).
 - The file content in the user message has 0-INDEXED line numbers
-  prefixed (NNN | content), matching the convention used in your
-  JSON output. The first line of the file is line 0.
-- Maximum {MAX_CHANGED_LINES_DEFAULT} lines changed per response.
-  Maximum {MAX_CHANGED_DECLS_DEFAULT} declarations touched.
-  Exceeding either is rejected.
+  prefixed (NNN | content), matching the convention your edit ranges
+  use. The first line of the file is line 0.
+- Maximum {MAX_CHANGED_LINES_DEFAULT} lines changed per call.
+  Maximum {MAX_CHANGED_DECLS_DEFAULT} declarations touched. Exceeding
+  either is rejected.
 - Do NOT introduce `sorry`. Do NOT introduce a top-level `axiom`.
   Do NOT remove any declaration that existed at the start.
 - Preserve theorem statements (the part before `:= ...`). Refactoring
   a statement is rejected by default.
 
-INTENDED_SCOPE is your contract:
-- Declare every top-level decl you plan to modify.
-- The system cross-checks against the decls your edits actually touch;
-  touching a decl outside your scope is logged as a warning.
+INTENDED_SCOPE.
+Declare every top-level decl you plan to modify. The controller
+cross-checks against the decls your edits actually touch; touching
+a decl outside your declared scope is logged as a warning.
 
-YOU MAY:
+YOU MAY.
 - modify proof bodies (replace tactics, rewrite the proof)
 - insert imports at the top of the file
 - adjust type annotations
 - repair namespace references
 - use existing Mathlib lemmas
 
-IF YOU CANNOT FIX A DIAGNOSTIC, list its id as STRING (e.g. "2") in remaining_blockers.
+IF YOU CANNOT FIX A DIAGNOSTIC, list its id as a STRING (e.g. "2") in
+`remaining_blockers`.
 """
 
 
@@ -117,36 +90,20 @@ that attempts to satisfy it.
 
 Toolchain: {LEAN_TOOLCHAIN_PIN}.
 
-OUTPUT FORMAT — STRICT.
-Same JSON schema as the repair mode. Use a SINGLE Fix with diagnostic_ids
-empty and ONE Edit that replaces the (empty) starter content with your
-full generated file. Set `strategy` to "generation".
+OUTPUT.
+Call the `submit_fix` tool. Use a SINGLE Fix with `diagnostic_ids: []`
+and ONE Edit that replaces the (empty) starter content with your full
+generated file. Set `strategy` to "generation" and `intended_scope` to
+the empty list.
 
-SCHEMA:
-{{
-  "summary":            string,
-  "strategy":           "generation",
-  "reasoning":          string,
-  "confidence":         number,
-  "intended_scope":     [],                 // generation can be empty
-  "fixes": [
-    {{
-      "diagnostic_ids": [],
-      "edits": [
-        {{
-          "kind": "replace_range",
-          "range": {{ "start": {{"line":0,"character":0}},
-                     "end":   {{"line":0,"character":0}} }},
-          "replacement": "...the full Lean file contents..."
-        }}
-      ]
-    }}
-  ],
-  "remaining_blockers": []
-}}
+The edit's range should be:
+  {{"start": {{"line": 0, "character": 0}},
+   "end":   {{"line": 0, "character": 0}}}}
+
+The full file contents go in the edit's `replacement` field.
 
 YOU MAY produce any number of imports, definitions, theorems, etc.
-in the `replacement` string. Use `Mathlib` for standard math.
+Use `Mathlib` for standard math.
 """
 
 
@@ -159,8 +116,8 @@ def build_repair_messages(
     strategy_nudge: str | None = None,
     decl_names: list[str] | None = None,
     enclosing_decls_of_errors: list[str] | None = None,
-) -> tuple[str, str, str | None, str]:
-    """Build (user_prompt, system, prefill, prompt_version) for REPAIR mode.
+) -> tuple[str, str, str]:
+    """Build (user_prompt, system, prompt_version) for REPAIR mode.
 
     `diagnostics` must already carry the `id` field (use
     `refine.evaluator.assign_diagnostic_ids` before calling).
@@ -188,24 +145,19 @@ def build_repair_messages(
         )
         if section
     )
-    return user_prompt, _REPAIR_SYSTEM_PROMPT, ASSISTANT_PREFILL, PROMPT_VERSION_REPAIR
+    return user_prompt, _REPAIR_SYSTEM_PROMPT, PROMPT_VERSION_REPAIR
 
 
-def build_generation_messages(goal: str) -> tuple[str, str, str | None, str]:
-    """Build (user_prompt, system, prefill, prompt_version) for GENERATION."""
+def build_generation_messages(goal: str) -> tuple[str, str, str]:
+    """Build (user_prompt, system, prompt_version) for GENERATION."""
     user_prompt = (
         f"GOAL:\n{goal.strip()}\n\n"
         f"Toolchain: {LEAN_TOOLCHAIN_PIN}.\n\n"
-        "Produce the complete initial Lean 4 file from scratch. "
-        "Wrap the file contents in the JSON schema's "
+        "Produce the complete initial Lean 4 file from scratch and pass "
+        "it via the `submit_fix` tool's "
         "`fixes[0].edits[0].replacement` field."
     )
-    return (
-        user_prompt,
-        _GENERATE_SYSTEM_PROMPT,
-        ASSISTANT_PREFILL,
-        PROMPT_VERSION_GENERATE,
-    )
+    return user_prompt, _GENERATE_SYSTEM_PROMPT, PROMPT_VERSION_GENERATE
 
 
 def _format_numbered_file(content: str, focus_set: set[str]) -> str:

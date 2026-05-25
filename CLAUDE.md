@@ -52,7 +52,11 @@ uv run --with pytest --with pytest-cov --with pydantic --python 3.12 -- \
 
 ## Secrets
 
-- `.env` (gitignored) holds the real `ANTHROPIC_API_KEY`.
+- `.env` (gitignored) holds the real provider keys:
+  - `ANTHROPIC_API_KEY` — required for Anthropic models (sonnet/opus/haiku).
+  - `GOOGLE_API_KEY` — required only when using Gemini models
+    (gemini-flash-lite / gemini-flash / gemini-pro). Anthropic-only
+    setups can leave this unset.
 - `.env.example` (committed) is the template.
 - `CODE_QUALITY_STANDARD.txt` is gitignored — local-only working file.
 - Never commit secrets; never paste keys back into chat.

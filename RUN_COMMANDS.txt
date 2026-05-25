@@ -22,7 +22,8 @@
 # Run the refine loop
 --------------------------------------------------------------------------------
 
-  uv run --with anthropic --with python-dotenv --with leanclient --with pydantic \
+  uv run --with anthropic --with google-genai --with python-dotenv \
+      --with leanclient --with pydantic \
       --python 3.12 -m refine \
       --project-root examples/scratch \
       --file Scratch/Challenge.lean \
@@ -30,6 +31,10 @@
       --mode auto \
       --max-iters 3 \
       --max-cost-usd 0.10
+
+  # google-genai is only required when targeting --model gemini-*. Anthropic-
+  # only runs can omit it. GOOGLE_API_KEY must be set in .env (or exported)
+  # for Gemini calls; ANTHROPIC_API_KEY for Anthropic calls.
 
   Expected stderr on a cold (no-cache) run:
     [ask_llm] model=sonnet (anthropic:claude-sonnet-4-6) mode=raw ...

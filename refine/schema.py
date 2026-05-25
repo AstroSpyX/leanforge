@@ -1,12 +1,17 @@
 """Pydantic models for the LLM's structured refine response.
 
-These shapes are the contract between the prompt and the controller.
-A response that fails to validate surfaces as SCHEMA_VALIDATION and
-triggers the one-shot corrective retry. Pydantic enforces STRUCTURAL
-validity (types, required fields, value ranges). SEMANTIC validity
-(range.end >= range.start, diagnostic_ids exist, intended_scope names
-exist) is enforced in `refine.edits.validate_response`, which has
-access to the contextual state Pydantic does not.
+These shapes are the contract that the `submit_fix` tool's input
+schema is derived from (see `llm.tools.submit_fix`). Tool use with
+`strict=True` makes the provider validate model output against this
+schema server-side; by the time `RefineResponse(**call.input)` runs
+client-side, the dict is structurally valid by construction. The
+client-side validation here remains as a defense-in-depth check and
+to handle any future non-strict provider.
+
+SEMANTIC validity (range.end >= range.start, diagnostic_ids exist,
+intended_scope names exist) is enforced in
+`refine.edits.validate_response`, which has access to the contextual
+state Pydantic does not.
 """
 
 from __future__ import annotations
@@ -14,7 +19,7 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field
 
 
 class RepairStrategy(StrEnum):
@@ -64,13 +69,3 @@ class RefineResponse(BaseModel):
     intended_scope: list[ScopeItem]
     fixes: list[Fix]
     remaining_blockers: list[str]
-
-    @field_validator("remaining_blockers", mode="before")
-    @classmethod
-    def _coerce_blockers_to_str(cls, v: object) -> object:
-        # Models sometimes emit diagnostic IDs as ints (matching the int
-        # form of `diagnostic_ids` in Fix). Accept either form and
-        # standardize on strings here.
-        if isinstance(v, list):
-            return [str(x) for x in v]
-        return v

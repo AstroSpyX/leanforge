@@ -5,6 +5,113 @@
 
 
 -------
+2026-05-24 — v1.1.0 — tool-use + Google Gemini provider; llm/ reorganized
+-------
+
+  Scope: bundled architecture change on branch `tooluse-gemini`.
+  Hard cutover from prose-extraction to native tool-use, with a
+  second provider (Google Gemini via `google-genai`) added at the
+  same time so the abstraction is exercised by two implementations
+  from day one.
+
+  Why now:
+    Bugs 11, 12, 13 (truncation, remaining_blockers int-vs-string,
+    Range shape malformation) all traced to the same root cause —
+    parsing structured intent from a free-text response. Tool use
+    with `strict: true` (Anthropic) and Gemini's schema-driven
+    function calling validate the model's output server-side before
+    we ever see it, so that whole class of failures becomes
+    impossible by construction.
+
+  Architecture reorg (llm/):
+    llm/
+    ├── __init__.py            — re-exports public API + .env load
+    ├── ask.py                 — provider-agnostic dispatcher
+    ├── errors.py              — typed AskLLMError hierarchy
+    ├── response.py            — Response + ToolCall dataclasses
+    ├── models.py              — registry, now with 6 models
+    ├── cache.py               — disk cache (unchanged)
+    ├── tools/
+    │   ├── __init__.py        — ToolSpec dataclass
+    │   └── submit_fix.py      — Pydantic-derived submit_fix tool
+    ├── providers/
+    │   ├── anthropic.py       — Anthropic adapter (strict=true)
+    │   └── google.py          — Gemini adapter (google-genai SDK)
+    └── tests/                  — full coverage of every module
+
+  Tool-use cutover:
+    - `llm.ask(tools=[...], tool_choice="submit_fix", ...)` returns
+      a Response with `tool_calls: list[ToolCall]`. Strict mode
+      guarantees `tool_calls[0].input` matches the schema.
+    - submit_fix tool is derived from RefineResponse.model_json_
+      schema(), then post-processed: inline $refs (Anthropic strict
+      forbids them), set additionalProperties:false on every object,
+      strip $schema.
+    - Controller now calls ask() + reads response.tool_calls[0].
+      _extract_json_object and _parse_response_or_fail deleted.
+    - prefill parameter removed everywhere (was always None per
+      v1.0.1; tool use renders it irrelevant).
+    - Bug-12 field_validator on RefineResponse.remaining_blockers
+      deleted as dead code (strict mode makes coercion unreachable).
+
+  Gemini provider:
+    - Uses official `google-genai` SDK (NOT the deprecated
+      `google-generativeai`).
+    - Three models registered: gemini-flash-lite, gemini-flash,
+      gemini-pro (stable internal keys; provider_model_id can bump
+      independently as Google releases new versions).
+    - GOOGLE_API_KEY added to .env.example.
+    - Tool/tool_choice translation: ToolSpec → types.Tool with
+      function_declarations; tool_choice → types.ToolConfig with
+      AUTO/ANY/allowed_function_names.
+
+  Deleted code:
+    - llm/ask_llm.py (replaced by llm/ask.py + providers/*)
+    - refine/controller._extract_json_object
+    - refine/controller._parse_response_or_fail
+    - refine/prompt_builder.ASSISTANT_PREFILL
+    - prefill from build_repair_messages / build_generation_messages
+      return tuples (now 3-tuples instead of 4-tuples)
+    - RefineResponse._coerce_blockers_to_str validator
+    - SYSTEM_PROMPTS dict, `mode` parameter, ask_llm_text /
+      ask_llm_fix helpers (all unused outside their definitions)
+
+  System-prompt cleanup:
+    Both repair and generation prompts shrank by ~40% — the schema
+    section in prose is gone (schema is enforced by tool spec).
+    What remains: edit rules, scope contract, what's allowed,
+    repair-strategy enum values. Bumped PROMPT_VERSION to repair_v2
+    / generate_v2.
+
+  QA: 367 tests pass, 1 skipped (live-API smoke). ruff + mypy strict
+  clean. Mypy now runs on full llm/ + refine/ source (was previously
+  invoked file-by-file). New per-file ignore for leanforge.py and
+  smoke_test.py (long doctring example lines, unrelated to refactor).
+
+  Files added:
+    llm/ask.py, llm/errors.py, llm/response.py, llm/tools/__init__.py,
+    llm/tools/submit_fix.py, llm/providers/__init__.py,
+    llm/providers/anthropic.py, llm/providers/google.py,
+    llm/tests/{test_ask, test_response, test_tools, test_submit_fix}.py,
+    llm/tests/providers/{test_anthropic, test_google}.py.
+
+  Files modified:
+    llm/__init__.py, llm/models.py, llm/smoke_anthropic.py,
+    refine/controller.py, refine/prompt_builder.py, refine/schema.py,
+    refine/tests/{test_controller, test_prompt_builder, test_schema}.py,
+    pyproject.toml, .env.example, CLAUDE.md, RUN_COMMANDS.txt,
+    IMPROVEMENTS.txt.
+
+  Files deleted:
+    llm/ask_llm.py.
+
+  Next: OpenAI provider is now a ~150-LOC drop-in (
+  llm/providers/openai.py) — the abstraction proved out across
+  Anthropic + Gemini, so OpenAI is just one more case in the
+  dispatcher.
+
+
+-------
 2026-05-24 — milestone — Group.lean Stage 7 (quotient group) proven by Haiku in 1 iter for $0.022
 -------
 

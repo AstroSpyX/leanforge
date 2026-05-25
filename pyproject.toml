@@ -23,6 +23,14 @@ select = [
     "SIM",  # flake8-simplify
 ]
 
+# The standalone diagnostic CLI and quick smoke test predate the
+# 88-col rule; their long lines are in example invocations and docstring
+# code blocks where wrapping would hurt readability. Carve them out
+# rather than chase wraps that aren't relevant to the new code.
+[tool.ruff.lint.per-file-ignores]
+"leanforge.py" = ["E501"]
+"smoke_test.py" = ["E501"]
+
 [tool.mypy]
 python_version = "3.12"
 strict = true
@@ -32,3 +40,8 @@ ignore_missing_imports = true
 # project root as the base, which resolves refine.* unambiguously.
 explicit_package_bases = true
 mypy_path = "."
+# Tests rely heavily on pytest fixtures (which look "untyped" to mypy in
+# strict mode) and lean on Any-shaped dict literals for fixture data.
+# Production source (refine/, llm/ non-test modules) stays under --strict;
+# tests get the looser convention conventional for test code.
+exclude = "(refine|llm)/tests/.*"

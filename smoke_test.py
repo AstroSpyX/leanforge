@@ -8,6 +8,7 @@ Verifies the three primitives the rest of the pipeline depends on:
 Run:
     uv run --with leanclient --python 3.12 smoke_test.py
 """
+
 import json
 import sys
 from pathlib import Path
@@ -30,7 +31,10 @@ def main() -> int:
 
         first_err = next((d for d in diags if d.get("severity") == 1), None)
         if first_err is None:
-            print("[smoke] no error found — example file may have changed", file=sys.stderr)
+            print(
+                "[smoke] no error found — example file may have changed",
+                file=sys.stderr,
+            )
             return 1
 
         rng = first_err["range"]["start"]
@@ -40,13 +44,19 @@ def main() -> int:
         term = sfc.get_term_goal(line, char)
         idiags = sfc.get_interactive_diagnostics()
 
-        print(json.dumps({
-            "diagnostics_count": len(diags),
-            "first_error_message": first_err["message"][:80],
-            "goal_at_error": goal,
-            "term_goal_at_error": term,
-            "interactive_diagnostics_count": len(idiags),
-        }, indent=2, default=str))
+        print(
+            json.dumps(
+                {
+                    "diagnostics_count": len(diags),
+                    "first_error_message": first_err["message"][:80],
+                    "goal_at_error": goal,
+                    "term_goal_at_error": term,
+                    "interactive_diagnostics_count": len(idiags),
+                },
+                indent=2,
+                default=str,
+            )
+        )
         return 0
     finally:
         client.close()

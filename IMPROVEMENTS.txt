@@ -203,28 +203,27 @@ DIAGNOSTIC / OBSERVABILITY
 ARCHITECTURE / EXTENSION
 --------------------------------------------------------------------------------
 
-  * [v1.1.0 — DECIDED] Anthropic tool-use API as the primary
-    structured-output path.
-      v1.0.6 showed that prose-extraction is fragile: Claude readily
-      prefixes JSON with reasoning prose on complex tasks; the
-      extractor is a bandaid that can fail on edge cases (multiple
-      braces in prose, illustrative {...} examples, partial output).
-      Tool-use forces the model to emit a typed argument block — no
-      prose-in-text problem possible. Migration path:
-        1. Define a Pydantic-derived tool schema for RefineResponse
-        2. Add a tool_use branch in ask_llm (alongside the current
-           plain-text branch)
-        3. Controller calls ask_llm with the tool definition
-        4. Response.text comes from the tool_use block's input dict
-        5. Drop _extract_json_object once stable
-      Spec rev 4.1 explicitly opted out of tool-use; that decision
-      is reversed by the v1.0.6 evidence.
+  * [v1.1.0 — DONE 2026-05-24] Tool-use as the primary structured-
+    output path; multi-provider (Anthropic + Google Gemini).
+      Hard cutover. The plain-text branch in ask_llm was deleted; all
+      callers go through `llm.ask` with `tools=[SUBMIT_FIX_TOOL]` and
+      `tool_choice="submit_fix"`. Anthropic's `strict: true` and
+      Gemini's schema-driven function-calling both validate model
+      output against the schema server-side, eliminating the Bug 12/
+      13 class of validation failures. The architecture reorg split
+      `llm/` into errors / response / tools / providers/{anthropic,
+      google}, and the ask dispatcher routes on ModelConfig.provider.
+      OpenAI integration (originally a separate IMPROVEMENT) is now
+      a one-file copy of providers/anthropic.py — drop in
+      llm/providers/openai.py, add models to the registry.
 
-  * OpenAI provider in ask_llm.
-      Registry already has `provider` field on ModelConfig; "openai"
-      models would slot in alongside "anthropic". Needs: _call_openai
-      branch, OpenAI SDK error→typed-exception mapping, OPENAI_API_KEY
-      in .env.example. Spec rev 5 covers the shape.
+  * OpenAI provider — architecture-ready after v1.1.0.
+      llm/providers/{anthropic,google}.py demonstrate the shape:
+      one `call()` entry point, error mapping, ToolSpec translation,
+      Response construction. Adding OpenAI is ~150 LOC of new code
+      + tests + an entry in llm/models.py. The dispatcher in
+      llm/ask.py picks it up automatically once cfg.provider ==
+      "openai" routes there.
 
   * Multi-file editing.
       Currently `<file_slug>/` directory per file under .refine/.

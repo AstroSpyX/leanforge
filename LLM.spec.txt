@@ -1,9 +1,33 @@
-ASK_LLM COMPONENT — PLAN (revision 5)
+ASK_LLM COMPONENT — PLAN (revision 6)
 ======================================
 
-Generic remote-LLM interface. Anthropic is the current implementation;
-the provider abstraction is designed so OpenAI (and any future
-provider) can be added without disturbing callers.
+Generic remote-LLM interface. Anthropic + Google Gemini are both
+implemented; the provider abstraction admits OpenAI (or any future
+provider) as a one-file drop-in.
+
+Revision 6 delta (see PROJECT_LOG entry "v1.1.0" for the full
+narrative; this is the spec-level summary):
+
+  - Public entry point renamed: `ask_llm()` → `ask()` (the original
+    name had Anthropic-specific framing). Re-exported from `llm`
+    package root.
+  - Tool use is now the only structured-output path. The plain-text
+    branch was deleted in a hard cutover. Callers pass
+    `tools=[ToolSpec(...)]` and `tool_choice="name"`; the
+    response's `tool_calls: list[ToolCall]` is schema-validated by
+    the provider (Anthropic strict=true; Gemini schema-driven).
+  - Module layout split: `llm/{ask,errors,response,cache,models}.py`
+    + `llm/tools/{__init__,submit_fix}.py` +
+    `llm/providers/{anthropic,google}.py`. One file per provider;
+    dispatcher in ask.py.
+  - Google Gemini provider added via the official `google-genai`
+    SDK (NOT the deprecated `google-generativeai`). Three models:
+    gemini-flash-lite, gemini-flash, gemini-pro.
+  - Removed: ask_llm_text, ask_llm_fix (unused), `mode` parameter,
+    SYSTEM_PROMPTS dict, `prefill` parameter (always None since
+    v1.0.1; tool use makes it irrelevant). Bug 12/13-era schema
+    coercion deleted as dead code (strict mode makes it
+    unreachable).
 
 History note: revisions 1-3 targeted local LLMs via Ollama. That path
 was evaluated and dropped. The complete install recipe, eval

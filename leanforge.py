@@ -11,6 +11,7 @@ Usage:
 Example (using the bundled example project):
     uv run --with leanclient --python 3.12 leanforge.py examples/scratch Scratch/Basic.lean
 """
+
 from __future__ import annotations
 
 import argparse
@@ -43,6 +44,7 @@ def source_snippet(file_abs: Path, range_: dict, context: int = 3) -> dict:
 
 def find_enclosing_decl(symbols: list[dict], line: int) -> dict | None:
     """Walk LSP document symbols, return the innermost one containing `line`."""
+
     def walk(syms: list[dict]) -> dict | None:
         for s in syms:
             r = s.get("range") or s.get("selectionRange")
@@ -52,10 +54,13 @@ def find_enclosing_decl(symbols: list[dict], line: int) -> dict | None:
                 deeper = walk(s.get("children") or [])
                 return deeper or s
         return None
+
     return walk(symbols)
 
 
-def enrich(sfc, file_abs: Path, doc_symbols: list[dict], diag: dict, interactive: dict | None) -> dict:
+def enrich(
+    sfc, file_abs: Path, doc_symbols: list[dict], diag: dict, interactive: dict | None
+) -> dict:
     rng = diag["range"]
     line = rng["start"]["line"]
     char = rng["start"]["character"]
@@ -83,7 +88,9 @@ def enrich(sfc, file_abs: Path, doc_symbols: list[dict], diag: dict, interactive
         "range": rng,
         "fullRange": diag.get("fullRange"),
         "messageText": diag.get("message"),
-        "messageInteractive": (interactive or {}).get("message") if interactive else None,
+        "messageInteractive": (interactive or {}).get("message")
+        if interactive
+        else None,
         "source": diag.get("source"),
         "tags": diag.get("tags"),
         "goal": goal,
@@ -95,7 +102,10 @@ def enrich(sfc, file_abs: Path, doc_symbols: list[dict], diag: dict, interactive
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("project_root", help="Path to a Lake project root (has lakefile.* and lean-toolchain)")
+    ap.add_argument(
+        "project_root",
+        help="Path to a Lake project root (has lakefile.* and lean-toolchain)",
+    )
     ap.add_argument("file_relpath", help="Lean file path relative to project_root")
     args = ap.parse_args()
 
@@ -113,7 +123,10 @@ def main() -> int:
         print("[leanforge] waiting for elaboration...", file=sys.stderr)
         diags_result = sfc.get_diagnostics()
         diags = diags_result.diagnostics
-        print(f"[leanforge] got {len(diags)} diagnostic(s), success={diags_result.success}", file=sys.stderr)
+        print(
+            f"[leanforge] got {len(diags)} diagnostic(s), success={diags_result.success}",
+            file=sys.stderr,
+        )
 
         print("[leanforge] fetching interactive diagnostics...", file=sys.stderr)
         try:
@@ -131,8 +144,13 @@ def main() -> int:
 
         def key(d: dict) -> tuple:
             r = d["range"]
-            return (r["start"]["line"], r["start"]["character"],
-                    r["end"]["line"], r["end"]["character"])
+            return (
+                r["start"]["line"],
+                r["start"]["character"],
+                r["end"]["line"],
+                r["end"]["character"],
+            )
+
         interactive_by_range = {key(d): d for d in interactive_list if "range" in d}
 
         enriched = []

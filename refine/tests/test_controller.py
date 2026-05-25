@@ -8,14 +8,13 @@ and cover the convergence / classification logic.
 
 import pytest
 
-from llm.ask_llm import AskLLMError
+from llm import AskLLMError, Response, ToolCall
 from refine.controller import (
     _classify_status,
     _compute_state_hash,
     _count_by_severity,
     _describe_rejection,
-    _extract_json_object,
-    _parse_response_or_fail,
+    _parse_tool_response,
     _progress_counts,
     _unique_enclosing_decl_names,
 )
@@ -190,58 +189,63 @@ class TestDescribeRejection:
         assert "5" in text
 
 
-_VALID_PAYLOAD = (
-    '{"summary":"x","strategy":"other","reasoning":"x","confidence":0.5,'
-    '"intended_scope":[],"fixes":[],"remaining_blockers":[]}'
-)
+_VALID_PAYLOAD: dict = {
+    "summary": "x",
+    "strategy": "other",
+    "reasoning": "x",
+    "confidence": 0.5,
+    "intended_scope": [],
+    "fixes": [],
+    "remaining_blockers": [],
+}
 
 
-class TestExtractJsonObject:
-    def test_pure_json_passes_through(self) -> None:
-        assert _extract_json_object(_VALID_PAYLOAD) == _VALID_PAYLOAD
-
-    def test_prose_prefix_is_stripped(self) -> None:
-        prose = "Looking at the diagnostics, I will fix this.\n\n"
-        text = prose + _VALID_PAYLOAD
-        assert _extract_json_object(text) == _VALID_PAYLOAD
-
-    def test_markdown_fence_prefix_is_stripped(self) -> None:
-        text = "```json\n" + _VALID_PAYLOAD + "\n```"
-        assert _extract_json_object(text) == _VALID_PAYLOAD
-
-    def test_trailing_prose_is_stripped(self) -> None:
-        text = _VALID_PAYLOAD + "\n\nLet me know if you need adjustments."
-        assert _extract_json_object(text) == _VALID_PAYLOAD
-
-    def test_missing_brace_raises_value_error(self) -> None:
-        with pytest.raises(ValueError, match="no opening brace"):
-            _extract_json_object("just prose, no json here")
-
-    def test_unterminated_json_raises_value_error(self) -> None:
-        """raw_decode raises JSONDecodeError (a ValueError) on truncated input."""
-        with pytest.raises(ValueError):
-            _extract_json_object('Some prose. {"summary":"x", ')
+def _response_with_tool_calls(calls: list[ToolCall]) -> Response:
+    return Response(
+        text="",
+        model="sonnet",
+        provider="anthropic",
+        provider_model_id="claude-sonnet-4-6",
+        latency_ms=0,
+        input_tokens=0,
+        output_tokens=0,
+        cache_creation_tokens=0,
+        cache_read_tokens=0,
+        stop_reason="tool_use",
+        cached=False,
+        tool_calls=calls,
+    )
 
 
-class TestParseResponseOrFail:
-    def test_clean_json_parses(self) -> None:
-        response = _parse_response_or_fail(_VALID_PAYLOAD)
-        assert response.summary == "x"
-
-    def test_prose_wrapped_json_parses(self) -> None:
-        """The real bug from v1.0.6: Claude prefixed its JSON with
-        'Looking at the diagnostics...' and the extractor must strip it."""
-        text = (
-            "Looking at the diagnostics, I'll fix pow_add by inducting on n.\n\n"
-            + _VALID_PAYLOAD
+class TestParseToolResponse:
+    def test_valid_submit_fix_call_parses(self) -> None:
+        response = _response_with_tool_calls(
+            [ToolCall(id="tu_01", name="submit_fix", input=_VALID_PAYLOAD)]
         )
-        response = _parse_response_or_fail(text)
-        assert response.summary == "x"
+        result = _parse_tool_response(response)
+        assert result.summary == "x"
 
-    def test_no_json_raises_typed_error(self) -> None:
-        with pytest.raises(AskLLMError, match="no JSON object"):
-            _parse_response_or_fail("just prose, no JSON here")
+    def test_other_tool_calls_are_ignored(self) -> None:
+        """Multiple tool calls in one response: pick the submit_fix one."""
+        response = _response_with_tool_calls(
+            [
+                ToolCall(id="tu_01", name="other_tool", input={"foo": "bar"}),
+                ToolCall(id="tu_02", name="submit_fix", input=_VALID_PAYLOAD),
+            ]
+        )
+        result = _parse_tool_response(response)
+        assert result.summary == "x"
 
-    def test_schema_invalid_raises_typed_error(self) -> None:
-        with pytest.raises(AskLLMError, match="did not match RefineResponse schema"):
-            _parse_response_or_fail('{"not_a_refine_response": true}')
+    def test_missing_submit_fix_raises_typed_error(self) -> None:
+        """If strict tool use regresses upstream, surface clearly."""
+        response = _response_with_tool_calls([])
+        with pytest.raises(AskLLMError, match="expected a submit_fix tool call"):
+            _parse_tool_response(response)
+
+    def test_schema_invalid_payload_raises_typed_error(self) -> None:
+        """Defensive: shouldn't happen under strict mode, but if it does."""
+        response = _response_with_tool_calls(
+            [ToolCall(id="tu_01", name="submit_fix", input={"bogus": True})]
+        )
+        with pytest.raises(AskLLMError, match="submit_fix payload did not match"):
+            _parse_tool_response(response)

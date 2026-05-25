@@ -11,7 +11,8 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from llm.ask_llm import AskLLMError, ask_llm
+from llm import AskLLMError, Response, ask
+from llm.tools.submit_fix import SUBMIT_FIX_TOOL
 from refine.artifact_store import ArtifactStore
 from refine.coords import normalize_line_endings
 from refine.cost import base_cost_usd, iteration_cost_usd
@@ -182,15 +183,16 @@ def _bootstrap_starter(
             store.write_snapshot(0, existing)
             return existing
 
-    user_prompt, system, prefill, _ = build_generation_messages(goal)
-    response = ask_llm(
-        prompt=user_prompt,
+    user_prompt, system, _ = build_generation_messages(goal)
+    response = ask(
+        user_prompt,
         model=model,
-        system_override=system,
-        prefill=prefill,
+        system=system,
         max_tokens=max_tokens,
+        tools=[SUBMIT_FIX_TOOL],
+        tool_choice="submit_fix",
     )
-    refine_response = _parse_response_or_fail(response.text)
+    refine_response = _parse_tool_response(response)
     if not refine_response.fixes or not refine_response.fixes[0].edits:
         raise RuntimeError("generation produced no edits")
     generated = normalize_line_endings(refine_response.fixes[0].edits[0].replacement)
@@ -200,8 +202,14 @@ def _bootstrap_starter(
     if keep_raw_llm_io:
         store.write_raw_io(
             0,
-            prompt={"system": system, "user": user_prompt, "prefill": prefill},
-            response={"text": response.text},
+            prompt={"system": system, "user": user_prompt},
+            response={
+                "text": response.text,
+                "tool_calls": [
+                    {"id": c.id, "name": c.name, "input": c.input}
+                    for c in response.tool_calls
+                ],
+            },
         )
     return generated
 
@@ -293,7 +301,7 @@ def _run_one_iteration(
     decl_names = [s.name for s in extract_signatures(prev_state.file_content)]
     recent_failures = _assemble_recent_failures(history)
 
-    user_prompt, system, prefill, _ = build_repair_messages(
+    user_prompt, system, _ = build_repair_messages(
         goal=history.goal,
         file_content=prev_state.file_content,
         diagnostics=diagnostics_with_ids,
@@ -301,22 +309,29 @@ def _run_one_iteration(
         decl_names=decl_names,
         enclosing_decls_of_errors=enclosing_decls,
     )
-    response = ask_llm(
-        prompt=user_prompt,
+    response = ask(
+        user_prompt,
         model=model,
-        system_override=system,
-        prefill=prefill,
+        system=system,
         max_tokens=max_tokens,
+        tools=[SUBMIT_FIX_TOOL],
+        tool_choice="submit_fix",
     )
 
     if keep_raw_llm_io:
         store.write_raw_io(
             iteration,
-            prompt={"system": system, "user": user_prompt, "prefill": prefill},
-            response={"text": response.text},
+            prompt={"system": system, "user": user_prompt},
+            response={
+                "text": response.text,
+                "tool_calls": [
+                    {"id": c.id, "name": c.name, "input": c.input}
+                    for c in response.tool_calls
+                ],
+            },
         )
 
-    refine_response = _parse_response_or_fail(response.text)
+    refine_response = _parse_tool_response(response)
     semantic_errors = validate_response(
         refine_response,
         valid_diagnostic_ids={d["id"] for d in diagnostics_with_ids},
@@ -480,39 +495,28 @@ def _run_one_iteration(
     )
 
 
-def _parse_response_or_fail(text: str) -> RefineResponse:
-    """Extract the first JSON object from the model's response and validate.
+def _parse_tool_response(response: Response) -> RefineResponse:
+    """Pull the submit_fix tool_call payload out of a Response and validate.
 
-    Without prefill (rejected by current Anthropic models), the model
-    often wraps the JSON in prose. We locate the first `{`, let
-    json.JSONDecoder.raw_decode find the matching close, then hand
-    the substring to Pydantic.
+    With strict tool use (strict=True on the tool spec + tool_choice
+    pinning the submit_fix tool), the provider guarantees the model
+    will emit a submit_fix call with schema-conformant input. The
+    ValidationError branch below is defensive — it can only fire if a
+    provider regresses on its strict-mode contract.
     """
+    submit_calls = [c for c in response.tool_calls if c.name == "submit_fix"]
+    if not submit_calls:
+        raise AskLLMError(
+            f"expected a submit_fix tool call; response had "
+            f"stop_reason={response.stop_reason!r} and "
+            f"{len(response.tool_calls)} other tool call(s)"
+        )
     try:
-        json_text = _extract_json_object(text)
-    except ValueError as exc:
-        raise AskLLMError(f"no JSON object in response: {exc}") from exc
-    try:
-        return RefineResponse.model_validate_json(json_text)
+        return RefineResponse(**submit_calls[0].input)
     except ValidationError as exc:
         raise AskLLMError(
-            f"response did not match RefineResponse schema: {exc}"
+            f"submit_fix payload did not match RefineResponse schema: {exc}"
         ) from exc
-
-
-def _extract_json_object(text: str) -> str:
-    """Return the substring of `text` that constitutes the first complete
-    JSON object. Raises ValueError if no `{` is found or the substring
-    starting at the first `{` is not a valid JSON object.
-    """
-    import json as _json
-
-    start = text.find("{")
-    if start < 0:
-        raise ValueError("no opening brace in response")
-    decoder = _json.JSONDecoder()
-    _, end = decoder.raw_decode(text, start)
-    return text[start:end]
 
 
 def _count_by_severity(diagnostics: list[dict[str, Any]]) -> tuple[int, int]:
