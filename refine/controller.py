@@ -147,10 +147,16 @@ def refine(
         return history
     carryover_pseudo_diagnostics = stage_result.pseudo_diagnostics
     if stage_result.stage_name != "all":
+        summary_str = (
+            "  (" + " | ".join(stage_result.summaries) + ")"
+            if stage_result.summaries
+            else ""
+        )
         logger.info(
-            "iter=0 stage_fail stage=%s pseudo_diagnostics=%d",
+            "iter=0 stage_fail stage=%s pseudo_diagnostics=%d%s",
             stage_result.stage_name,
             len(carryover_pseudo_diagnostics),
+            summary_str,
         )
 
     cumulative_input = 0
@@ -201,11 +207,17 @@ def refine(
         if stage_result.passed:
             history.final_status = Status.SUCCESS
             break
+        summary_str = (
+            "  (" + " | ".join(stage_result.summaries) + ")"
+            if stage_result.summaries
+            else ""
+        )
         logger.info(
-            "iter=%d stage_fail stage=%s pseudo_diagnostics=%d",
+            "iter=%d stage_fail stage=%s pseudo_diagnostics=%d%s",
             iteration,
             stage_result.stage_name,
             len(carryover_pseudo_diagnostics),
+            summary_str,
         )
         if outcome_state.status == Status.BUDGET_EXCEEDED:
             history.final_status = Status.BUDGET_EXCEEDED

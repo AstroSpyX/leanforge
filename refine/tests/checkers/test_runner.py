@@ -71,6 +71,63 @@ class TestRunStages:
         result = run_stages([], "", [])
         assert result.passed is True
 
+    def test_failing_checker_summary_flows_into_stage_result(self) -> None:
+        """Each failing checker's summary appears in StageResult.summaries
+        prefixed with the checker's name so log lines can render
+        per-checker context (total counts, judge reasoning, etc.)."""
+
+        @dataclass
+        class _SummaryStub:
+            name: str
+            result: CheckResult
+            calls: list[None]
+
+            def check(self, content, diagnostics):  # type: ignore[no-untyped-def]
+                self.calls.append(None)
+                return self.result
+
+        c1 = _SummaryStub(
+            name="errors",
+            result=CheckResult(passed=False, summary="5 errors"),
+            calls=[],
+        )
+        c2 = _SummaryStub(
+            name="sorries",
+            result=CheckResult(passed=False, summary="2 sorries"),
+            calls=[],
+        )
+        stages = [CheckerStage("policy", (c1, c2))]  # type: ignore[arg-type]
+        result = run_stages(stages, "", [])
+        assert result.summaries == ["errors: 5 errors", "sorries: 2 sorries"]
+
+    def test_passing_checker_summary_omitted_from_stage_result(self) -> None:
+        """A checker that passes contributes no summary (its result
+        isn't in StageResult.summaries even if .summary was set)."""
+
+        @dataclass
+        class _Stub:
+            name: str
+            result: CheckResult
+            calls: list[None]
+
+            def check(self, content, diagnostics):  # type: ignore[no-untyped-def]
+                self.calls.append(None)
+                return self.result
+
+        passing = _Stub(
+            name="ok",
+            result=CheckResult(passed=True, summary="nothing wrong"),
+            calls=[],
+        )
+        failing = _Stub(
+            name="bad",
+            result=CheckResult(passed=False, summary="3 problems"),
+            calls=[],
+        )
+        stages = [CheckerStage("mix", (passing, failing))]  # type: ignore[arg-type]
+        result = run_stages(stages, "", [])
+        assert result.summaries == ["bad: 3 problems"]
+
     def test_diagnostics_propagated_to_checkers(self) -> None:
         """Stage runner must pass content + diagnostics through."""
         seen_args: dict = {}

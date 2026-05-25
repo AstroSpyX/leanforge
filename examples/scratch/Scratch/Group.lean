@@ -19,7 +19,7 @@ structure MyGroup (G : Type) where
 section
 variable {G : Type} (Γ : MyGroup G)
 set_option hygiene false
-local notation:70 a " * " b => Γ.op a b
+local infixl:70 " * " => Γ.op
 local notation:max a "⁻¹" => Γ.inv a
 local notation "e" => Γ.e
 
@@ -82,7 +82,7 @@ theorem inv_op {G : Type} (Γ : MyGroup G) (a b : G) :
   by
   exact (inverse_unique Γ (a * b) (b⁻¹ * a⁻¹)
     (calc (a * b) * (b⁻¹ * a⁻¹)
-        = a * (b * (b⁻¹ * a⁻¹)) := Γ.assoc a b _
+        = a * (b * (b⁻¹ * a⁻¹)) := Γ.assoc a b (b⁻¹ * a⁻¹)
       _ = a * ((b * b⁻¹) * a⁻¹) := by rw [← Γ.assoc b b⁻¹ a⁻¹]
       _ = a * (e * a⁻¹) := by rw [Γ.inv_right b]
       _ = a * a⁻¹ := by rw [Γ.e_left]
@@ -100,33 +100,36 @@ theorem solve_left {G : Type} (Γ : MyGroup G)
 -- Right cancellation law: b · a = c · a ⇒ b = c.
 theorem right_cancel {G : Type} (Γ : MyGroup G)
     (a b c : G) (h : Γ.op b a = Γ.op c a) : b = c :=
-  calc b = Γ.op b Γ.e := (Γ.e_right b).symm
-    _ = Γ.op b (Γ.op a (Γ.inv a)) := by rw [Γ.inv_right]
-    _ = Γ.op (Γ.op b a) (Γ.inv a) := (Γ.assoc b a (Γ.inv a)).symm
-    _ = Γ.op (Γ.op c a) (Γ.inv a) := by rw [h]
-    _ = Γ.op c (Γ.op a (Γ.inv a)) := Γ.assoc c a (Γ.inv a)
-    _ = Γ.op c Γ.e := by rw [Γ.inv_right]
+  calc b = b * e := (Γ.e_right b).symm
+    _ = b * (a * a⁻¹) := by rw [Γ.inv_right]
+    _ = (b * a) * a⁻¹ := (Γ.assoc b a a⁻¹).symm
+    _ = (c * a) * a⁻¹ := by rw [h]
+    _ = c * (a * a⁻¹) := Γ.assoc c a a⁻¹
+    _ = c * e := by rw [Γ.inv_right]
     _ = c := Γ.e_right c
 
 
 -- Double inverse: (a⁻¹)⁻¹ = a.
 theorem inv_inv {G : Type} (Γ : MyGroup G)
     (a : G) :
-    Γ.inv (Γ.inv a) = a := by
-    exact (inverse_unique Γ (Γ.inv a) a (Γ.inv_left a)).symm
+    Γ.inv (Γ.inv a) = a :=
+  by
+  exact (inverse_unique Γ a⁻¹ a (Γ.inv_left a)).symm
 
 
 -- Identity inverse: e⁻¹ = e.
 theorem inv_e {G : Type} (Γ : MyGroup G) :
-    Γ.inv Γ.e = Γ.e := by
-    exact (inverse_unique Γ Γ.e Γ.e (Γ.e_right Γ.e)).symm
+    Γ.inv Γ.e = Γ.e :=
+  by
+  exact (inverse_unique Γ e e (Γ.e_right e)).symm
 
 
 -- Power successor on the left:
 -- a^(n+1) = a · a^n.
 theorem pow_succ_left {G : Type} (Γ : MyGroup G)
     (a : G) (n : Nat) :
-    mypow Γ a (n + 1) = Γ.op a (mypow Γ a n) := by
+    mypow Γ a (n + 1) = Γ.op a (mypow Γ a n) :=
+  by
   induction n with
   | zero => simp only [mypow]; rw [Γ.e_left, Γ.e_right]
   | succ k ih =>
@@ -153,17 +156,18 @@ theorem commute_pow {G : Type} (Γ : MyGroup G)
     (h : Γ.op a b = Γ.op b a)
     (n : Nat) :
     Γ.op (mypow Γ a n) b =
-    Γ.op b (mypow Γ a n) := by
-        induction n with
+    Γ.op b (mypow Γ a n) :=
+  by
+  induction n with
   | zero => simp [mypow, Γ.e_left, Γ.e_right]
   | succ k ih =>
     simp only [mypow]
-    calc Γ.op (Γ.op (mypow Γ a k) a) b
-        = Γ.op (mypow Γ a k) (Γ.op a b) := Γ.assoc _ _ _
-      _ = Γ.op (mypow Γ a k) (Γ.op b a) := by rw [h]
-      _ = Γ.op (Γ.op (mypow Γ a k) b) a := (Γ.assoc _ _ _).symm
-      _ = Γ.op (Γ.op b (mypow Γ a k)) a := by rw [ih]
-      _ = Γ.op b (Γ.op (mypow Γ a k) a) := Γ.assoc _ _ _
+    calc mypow Γ a k * a * b
+        = mypow Γ a k * (a * b) := Γ.assoc _ _ _
+      _ = mypow Γ a k * (b * a) := by rw [h]
+      _ = mypow Γ a k * b * a := (Γ.assoc _ _ _).symm
+      _ = b * mypow Γ a k * a := by rw [ih]
+      _ = b * (mypow Γ a k * a) := Γ.assoc _ _ _
 
 
 
@@ -356,19 +360,19 @@ def subgroup_criterion {G : Type} (Γ : MyGroup G)
       have := closed witness witness witness_mem witness_mem
       rwa [Γ.inv_right] at this,
     op_closed := fun {a b} ha hb => by
-      have hinvb : S (Γ.inv b) := by
-        have he : S Γ.e := by
+      have hinvb : S b⁻¹ := by
+        have he : S e := by
           have := closed witness witness witness_mem witness_mem
           rwa [Γ.inv_right] at this
-        have := closed Γ.e b he hb
+        have := closed e b he hb
         rwa [Γ.e_left] at this
-      have := closed a (Γ.inv b) ha hinvb
+      have := closed a b⁻¹ ha hinvb
       rwa [inv_inv] at this,
     inv_closed := fun {a} ha => by
-      have he : S Γ.e := by
+      have he : S e := by
         have := closed witness witness witness_mem witness_mem
         rwa [Γ.inv_right] at this
-      have := closed Γ.e a he ha
+      have := closed e a he ha
       rwa [Γ.e_left] at this }
 
 
@@ -463,7 +467,7 @@ theorem same_left_coset_symm {G : Type}
     Symmetric (same_left_coset Γ H) := by
   intro x y hxy
   simp only [same_left_coset] at *
-  have h1 : H.carrier (Γ.inv (Γ.op (Γ.inv x) y)) := H.inv_closed hxy
+  have h1 : H.carrier ((x⁻¹ * y)⁻¹) := H.inv_closed hxy
   rw [inv_op, inv_inv] at h1
   exact h1
 
@@ -473,7 +477,7 @@ theorem same_left_coset_trans {G : Type}
     Transitive (same_left_coset Γ H) := by
   intro x y z hxy hyz
   simp only [same_left_coset] at *
-  have h1 : H.carrier (Γ.op (Γ.op (Γ.inv x) y) (Γ.op (Γ.inv y) z)) :=
+  have h1 : H.carrier ((x⁻¹ * y) * (y⁻¹ * z)) :=
     H.op_closed hxy hyz
   rw [Γ.assoc, ← Γ.assoc y, Γ.inv_right, Γ.e_left] at h1
   exact h1
@@ -503,14 +507,14 @@ def same_right_coset_equiv {G : Type}
     exact H.e_mem
   · intro x y hxy
     simp only [same_right_coset] at *
-    have h1 : H.carrier (Γ.inv (Γ.op x (Γ.inv y))) := H.inv_closed hxy
+    have h1 : H.carrier ((x * y⁻¹)⁻¹) := H.inv_closed hxy
     rw [inv_op, inv_inv] at h1
     exact h1
   · intro x y z hxy hyz
     simp only [same_right_coset] at *
-    have h1 : H.carrier (Γ.op (Γ.op x (Γ.inv y)) (Γ.op y (Γ.inv z))) :=
+    have h1 : H.carrier ((x * y⁻¹) * (y * z⁻¹)) :=
       H.op_closed hxy hyz
-    rw [Γ.assoc, ← Γ.assoc (Γ.inv y), Γ.inv_left, Γ.e_left] at h1
+    rw [Γ.assoc, ← Γ.assoc y⁻¹, Γ.inv_left, Γ.e_left] at h1
     exact h1
 
 
@@ -534,13 +538,13 @@ theorem coset_eq_iff {G : Type}
   constructor
   · intro heq
     simp only [same_left_coset]
-    have : left_coset H a a := ⟨Γ.e, H.e_mem, (Γ.e_right a).symm⟩
+    have : left_coset H a a := ⟨e, H.e_mem, (Γ.e_right a).symm⟩
     rw [heq] at this
     obtain ⟨h, hh, hah⟩ := this
-    -- hah : a = Γ.op b h, goal: H.carrier (Γ.op (Γ.inv a) b)
+    -- hah : a = b * h, goal: H.carrier (a⁻¹ * b)
     rw [hah, inv_op]
-    -- now goal: H.carrier (Γ.op (Γ.op (Γ.inv h) (Γ.inv b)) b)
-    have : Γ.op (Γ.op (Γ.inv h) (Γ.inv b)) b = Γ.inv h := by
+    -- now goal: H.carrier ((h⁻¹ * b⁻¹) * b)
+    have : (h⁻¹ * b⁻¹) * b = h⁻¹ := by
       rw [Γ.assoc, Γ.inv_left, Γ.e_right]
     rw [this]
     exact H.inv_closed hh
@@ -550,19 +554,19 @@ theorem coset_eq_iff {G : Type}
     apply propext
     constructor
     · rintro ⟨h, hh, hx⟩
-      refine ⟨Γ.op (Γ.op (Γ.inv b) a) h, H.op_closed ?_ hh, ?_⟩
-      · have : H.carrier (Γ.inv (Γ.op (Γ.inv a) b)) := H.inv_closed hab
+      refine ⟨(b⁻¹ * a) * h, H.op_closed ?_ hh, ?_⟩
+      · have : H.carrier (a⁻¹ * b)⁻¹ := H.inv_closed hab
         rw [inv_op, inv_inv] at this
         exact this
       · rw [hx]
-        rw [← Γ.assoc b (Γ.op (Γ.inv b) a) h]
-        rw [← Γ.assoc b (Γ.inv b) a]
+        rw [← Γ.assoc b (b⁻¹ * a) h]
+        rw [← Γ.assoc b b⁻¹ a]
         rw [Γ.inv_right, Γ.e_left]
     · rintro ⟨h, hh, hx⟩
-      refine ⟨Γ.op (Γ.op (Γ.inv a) b) h, H.op_closed hab hh, ?_⟩
+      refine ⟨(a⁻¹ * b) * h, H.op_closed hab hh, ?_⟩
       rw [hx]
-      rw [← Γ.assoc a (Γ.op (Γ.inv a) b) h]
-      rw [← Γ.assoc a (Γ.inv a) b]
+      rw [← Γ.assoc a (a⁻¹ * b) h]
+      rw [← Γ.assoc a a⁻¹ b]
       rw [Γ.inv_right, Γ.e_left]
 
 
@@ -608,15 +612,15 @@ theorem right_cosets_partition {G : Type}
     simp only [right_coset, same_right_coset] at *
     constructor
     · rintro ⟨k, hk, hx⟩
-      refine ⟨Γ.op k (Γ.op a (Γ.inv b)), H.op_closed hk h, ?_⟩
-      rw [hx, ← Γ.assoc k a, Γ.assoc (Γ.op k a)]
-      rw [show Γ.op (Γ.inv b) b = Γ.e from Γ.inv_left b, Γ.e_right]
+      refine ⟨k * (a * b⁻¹), H.op_closed hk h, ?_⟩
+      rw [hx, ← Γ.assoc k a, Γ.assoc (k * a)]
+      rw [show b⁻¹ * b = e from Γ.inv_left b, Γ.e_right]
     · rintro ⟨k, hk, hx⟩
-      have hinv : H.carrier (Γ.inv (Γ.op a (Γ.inv b))) := H.inv_closed h
+      have hinv : H.carrier ((a * b⁻¹)⁻¹) := H.inv_closed h
       rw [inv_op, inv_inv] at hinv
-      refine ⟨Γ.op k (Γ.op b (Γ.inv a)), H.op_closed hk hinv, ?_⟩
-      rw [hx, ← Γ.assoc k b, Γ.assoc (Γ.op k b)]
-      rw [show Γ.op (Γ.inv a) a = Γ.e from Γ.inv_left a, Γ.e_right]
+      refine ⟨k * (b * a⁻¹), H.op_closed hk hinv, ?_⟩
+      rw [hx, ← Γ.assoc k b, Γ.assoc (k * b)]
+      rw [show a⁻¹ * a = e from Γ.inv_left a, Γ.e_right]
   · right
     intro x ⟨hxa, hxb⟩
     apply h

@@ -110,3 +110,28 @@ class TestPatternAbsentCheckerCap:
         """The default value 20 is calibrated from real runs — pin it."""
         checker = PatternAbsentChecker(name="x", patterns=(r"x",))
         assert checker.max_reported == 20
+
+    def test_summary_shows_total_count(self) -> None:
+        """Summary reports the TOTAL, not the cap'd count — so log
+        lines show real progress (152 → 138 → 124 → ...)."""
+        content = _proof_body_with_n_matches(100)
+        checker = PatternAbsentChecker(
+            name="no_gamma_op", patterns=(r"Γ\.op",), max_reported=20
+        )
+        result = checker.check(content, [])
+        assert result.summary is not None
+        assert "100" in result.summary
+        assert "Γ\\.op" in result.summary or "Γ.op" in result.summary
+        assert "showing first 20" in result.summary
+        assert "80 more" in result.summary
+
+    def test_summary_omits_cap_note_when_below_threshold(self) -> None:
+        """When the total fits under max_reported, no truncation note."""
+        content = _proof_body_with_n_matches(5)
+        checker = PatternAbsentChecker(
+            name="x", patterns=(r"Γ\.op",), max_reported=20
+        )
+        result = checker.check(content, [])
+        assert result.summary is not None
+        assert "5" in result.summary
+        assert "showing first" not in result.summary

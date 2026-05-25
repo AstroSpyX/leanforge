@@ -40,4 +40,10 @@ class NoSorryChecker(Checker):
             msg = str(d.get("messageText", ""))
             if _SORRY_PATTERN.search(msg):
                 sorries.append(d)
-        return CheckResult(passed=not sorries, pseudo_diagnostics=sorries)
+        if not sorries:
+            return CheckResult(passed=True)
+        return CheckResult(
+            passed=False,
+            pseudo_diagnostics=sorries,
+            summary=f"{len(sorries)} `sorry` warning(s)",
+        )

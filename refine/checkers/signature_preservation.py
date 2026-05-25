@@ -67,4 +67,13 @@ class SignaturePreservationChecker(Checker):
                     ),
                 }
             )
-        return CheckResult(passed=False, pseudo_diagnostics=pseudo)
+        summary_parts: list[str] = []
+        if removed:
+            summary_parts.append(f"{len(removed)} decl(s) removed")
+        if changed:
+            summary_parts.append(f"{len(changed)} signature(s) changed")
+        return CheckResult(
+            passed=False,
+            pseudo_diagnostics=pseudo,
+            summary="; ".join(summary_parts),
+        )

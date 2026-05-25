@@ -28,7 +28,11 @@ class LeanCompileChecker(Checker):
     ) -> CheckResult:
         del content
         errors = [d for d in diagnostics if d.get("severity") in _ERROR_VALUES]
+        if not errors:
+            return CheckResult(passed=True)
         # Errors are surfaced by Lean directly — no pseudo-diagnostics
-        # to add. Returning the empty list here means a downstream
-        # iteration sees only Lean's authoritative messages.
-        return CheckResult(passed=not errors)
+        # to add. Summary gives the count for the log line.
+        return CheckResult(
+            passed=False,
+            summary=f"{len(errors)} Lean compile error(s)",
+        )

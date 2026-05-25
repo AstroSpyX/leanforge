@@ -35,12 +35,17 @@ def run_stages(
         results = [c.check(content, diagnostics) for c in stage.checkers]
         if not all(r.passed for r in results):
             failing: list[dict[str, Any]] = []
-            for r in results:
-                if not r.passed:
-                    failing.extend(r.pseudo_diagnostics)
+            summaries: list[str] = []
+            for checker, r in zip(stage.checkers, results, strict=True):
+                if r.passed:
+                    continue
+                failing.extend(r.pseudo_diagnostics)
+                if r.summary is not None:
+                    summaries.append(f"{checker.name}: {r.summary}")
             return StageResult(
                 stage_name=stage.name,
                 passed=False,
                 pseudo_diagnostics=failing,
+                summaries=summaries,
             )
-    return StageResult(stage_name="all", passed=True, pseudo_diagnostics=[])
+    return StageResult(stage_name="all", passed=True)
