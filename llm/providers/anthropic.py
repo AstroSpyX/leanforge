@@ -94,18 +94,71 @@ def _retry(
     raise last if last else AskLLMError("retry exhausted")
 
 
+_STRICT_UNSUPPORTED_KEYS = (
+    # Anthropic strict mode rejects numeric range constraints with
+    # "For 'number' type, properties maximum, minimum are not supported".
+    "minimum",
+    "maximum",
+    "exclusiveMinimum",
+    "exclusiveMaximum",
+    "multipleOf",
+    # And string-length / pattern constraints with similar errors.
+    "minLength",
+    "maxLength",
+    "pattern",
+    # And array/object size constraints.
+    "minItems",
+    "maxItems",
+    "minProperties",
+    "maxProperties",
+)
+
+
+def _anthropic_strict_compat_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    """Strip JSON Schema keywords Anthropic strict mode doesn't support.
+
+    Pydantic emits `minimum`/`maximum` for `Field(ge=, le=)`, `pattern`
+    for regex constraints, etc. Anthropic strict mode rejects all of
+    these with HTTP 400 ("properties X are not supported"). Strip them
+    from the schema we send to Anthropic — client-side Pydantic
+    validation on the way back still enforces the original constraints.
+    """
+    from copy import deepcopy
+
+    schema = deepcopy(schema)
+
+    def walk(node: Any) -> None:
+        if isinstance(node, dict):
+            for key in _STRICT_UNSUPPORTED_KEYS:
+                node.pop(key, None)
+            for v in node.values():
+                walk(v)
+        elif isinstance(node, list):
+            for v in node:
+                walk(v)
+
+    walk(schema)
+    return schema
+
+
 def _to_anthropic_tools(tools: list[ToolSpec]) -> list[dict[str, Any]]:
     """Translate ToolSpec → Anthropic's tool dict shape.
 
     `strict: true` makes Anthropic validate the model's tool_use input
     against `input_schema` server-side; the model retries internally
     on schema mismatch, so callers receive a guaranteed-valid input.
+    Strict-mode schema constraints are narrower than full JSON Schema
+    — strip the unsupported keywords here before sending.
     """
     return [
         {
             "name": t.name,
             "description": t.description,
-            "input_schema": t.input_schema,
+            "input_schema": (
+                _anthropic_strict_compat_schema(t.input_schema)
+                if t.strict
+                else t.input_schema
+            ),
             "strict": t.strict,
         }
         for t in tools

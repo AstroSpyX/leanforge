@@ -78,6 +78,45 @@ def _classify(e: Exception) -> AskLLMError:
     return AskLLMError(msg)
 
 
+def _gemini_compat_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    """Translate a JSON Schema dict to Gemini's accepted subset.
+
+    Gemini's `types.Schema` (a strict Pydantic model) plus the upstream
+    `generativelanguage.googleapis.com` validator reject some standard
+    JSON Schema keywords. Known incompatibilities we handle:
+
+      - `const: X` → `enum: [X]`. Pydantic emits `const` for
+        `Literal[...]` types; Gemini's Schema has no `const` field.
+      - `additionalProperties` is dropped entirely. Anthropic strict
+        mode requires it; Gemini's upstream API rejects it as an
+        unknown field (schema enforcement is implicit in Gemini's
+        function-calling model, so the keyword is redundant there).
+
+    The transform walks a deep copy so the caller's dict isn't mutated.
+    """
+    from copy import deepcopy
+
+    schema = deepcopy(schema)
+
+    def walk(node: Any) -> None:
+        if isinstance(node, dict):
+            if "const" in node:
+                # Always drop const (Gemini rejects it). Promote to enum
+                # only if no enum already exists — never overwrite.
+                value = node.pop("const")
+                if "enum" not in node:
+                    node["enum"] = [value]
+            node.pop("additionalProperties", None)
+            for v in node.values():
+                walk(v)
+        elif isinstance(node, list):
+            for v in node:
+                walk(v)
+
+    walk(schema)
+    return schema
+
+
 def _to_gemini_tools(tools: list[ToolSpec]) -> types.Tool:
     """Translate ToolSpec list → a single types.Tool with all declarations.
 
@@ -92,7 +131,7 @@ def _to_gemini_tools(tools: list[ToolSpec]) -> types.Tool:
                 # SDK accepts a JSON-Schema dict at runtime; its type stub
                 # narrowed to Schema only. Pass-through is the documented
                 # google-genai pattern.
-                parameters=t.input_schema,  # type: ignore[arg-type]
+                parameters=_gemini_compat_schema(t.input_schema),  # type: ignore[arg-type]
             )
             for t in tools
         ]

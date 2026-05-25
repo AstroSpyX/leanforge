@@ -14,6 +14,7 @@ from typing import Any
 from llm.providers.google import (
     _extract_text,
     _extract_tool_calls,
+    _gemini_compat_schema,
     _to_gemini_tool_config,
     _to_gemini_tools,
 )
@@ -35,6 +36,67 @@ def _mock_candidate(parts: list[Any]) -> Any:
 
 def _mock_response(candidates: list[Any]) -> Any:
     return SimpleNamespace(candidates=candidates)
+
+
+class TestGeminiCompatSchema:
+    def test_const_rewritten_as_enum(self) -> None:
+        """Pydantic emits `const` for Literal[...] types; Gemini's Schema
+        Pydantic model has no `const` field and rejects it. Convert
+        to the semantically equivalent single-element enum."""
+        schema = {"type": "string", "const": "replace_range"}
+        result = _gemini_compat_schema(schema)
+        assert "const" not in result
+        assert result["enum"] == ["replace_range"]
+
+    def test_const_at_nested_depth_rewritten(self) -> None:
+        """The transform must walk into nested objects and arrays."""
+        schema = {
+            "type": "object",
+            "properties": {
+                "edits": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {"kind": {"const": "x"}},
+                    },
+                }
+            },
+        }
+        result = _gemini_compat_schema(schema)
+        kind_schema = result["properties"]["edits"]["items"]["properties"]["kind"]
+        assert kind_schema == {"enum": ["x"]}
+
+    def test_existing_enum_not_overwritten(self) -> None:
+        """If both const and enum somehow coexist, enum wins (we don't
+        clobber an explicit choice)."""
+        schema = {"const": "x", "enum": ["a", "b"]}
+        result = _gemini_compat_schema(schema)
+        assert result == {"enum": ["a", "b"]}
+
+    def test_input_dict_not_mutated(self) -> None:
+        """Caller's dict is preserved (we deepcopy before walking)."""
+        schema = {"const": "x"}
+        _gemini_compat_schema(schema)
+        assert schema == {"const": "x"}
+
+    def test_additional_properties_stripped(self) -> None:
+        """Gemini's upstream API rejects additionalProperties as an
+        unknown field; Anthropic strict mode requires it. We strip
+        for Gemini, keep for Anthropic."""
+        schema = {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "nested": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {},
+                }
+            },
+        }
+        result = _gemini_compat_schema(schema)
+        assert "additionalProperties" not in result
+        assert "additionalProperties" not in result["properties"]["nested"]
 
 
 class TestToGeminiTools:
