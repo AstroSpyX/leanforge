@@ -4,6 +4,32 @@ version = "0.1.0"
 description = "Lean 4 diagnostics + LLM-driven repair loop"
 requires-python = ">=3.12"
 
+# PEP 735 dependency groups (supported by uv ≥ 0.4.27).
+# Use them via `uv run --group <name> --python 3.12 -- <command>` so
+# RUN_COMMANDS.txt doesn't need to enumerate every --with X flag.
+# Groups never become installed dependencies of the project; they're
+# pure tooling buckets.
+[dependency-groups]
+runtime = [
+    "anthropic",
+    "google-genai",
+    "python-dotenv",
+    "leanclient",
+    "pydantic",
+]
+test = [
+    {include-group = "runtime"},
+    "pytest",
+    "pytest-cov",
+]
+lint = [
+    "ruff",
+]
+typecheck = [
+    {include-group = "runtime"},
+    "mypy",
+]
+
 [tool.pytest.ini_options]
 testpaths = ["refine/tests", "llm/tests"]
 addopts = "-v --strict-markers"

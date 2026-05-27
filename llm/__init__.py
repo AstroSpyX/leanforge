@@ -7,24 +7,16 @@ Public API:
     AskLLMError + subclasses           (typed errors)
     MODELS, DEFAULT_MODEL              (model registry)
 
-On import, auto-loads variables from a project-root `.env` file into
-the process environment, WITHOUT overwriting variables that are already
-set. This makes ANTHROPIC_API_KEY / GOOGLE_API_KEY available to `ask`
-without the user having to `export` them in every shell session.
+Per CODE_QUALITY_STANDARD M-1 + M-2, this module does NOT load `.env`
+or perform any other I/O on import. Entry points that want `.env`
+auto-loaded must call `llm.env.load_env_if_available()` once at
+startup. `refine.__main__` and `llm.smoke_anthropic` already do this.
+Library-only callers (REPLs, notebooks, third-party CLIs) are
+responsible for ensuring relevant API keys are set in os.environ
+before calling `ask`.
 """
 
 from __future__ import annotations
-
-try:
-    from dotenv import load_dotenv
-
-    # Walk up from this file to find .env in the project root, then load.
-    # override=False means env vars set by the shell win over the file.
-    load_dotenv(override=False)
-except ImportError:
-    # python-dotenv not installed — fall back to whatever's in os.environ.
-    # ask() will surface a clear AuthError if the key is missing.
-    pass
 
 from llm.ask import ask
 from llm.errors import (

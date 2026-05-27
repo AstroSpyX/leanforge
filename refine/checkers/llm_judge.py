@@ -121,9 +121,8 @@ class LLMJudgeChecker(Checker):
         # First line of reasoning is usually the most informative;
         # plus a count of remaining items.
         first_line = reasoning.split("\n", 1)[0][:120] if reasoning else ""
-        summary = (
-            f"{len(remaining)} item(s) remaining"
-            + (f"; {first_line}" if first_line else "")
+        summary = f"{len(remaining)} item(s) remaining" + (
+            f"; {first_line}" if first_line else ""
         )
         return CheckResult(passed=False, pseudo_diagnostics=pseudo, summary=summary)
 

@@ -105,15 +105,11 @@ class PatternAbsentChecker(Checker):
             return CheckResult(passed=True)
         total = len(offenses)
         pattern_list = ", ".join(self.patterns)
-        summary = (
-            f"{total} occurrence(s) of [{pattern_list}] still in proof "
-            f"bodies"
-            + (
-                f" (showing first {self.max_reported}, "
-                f"{total - self.max_reported} more on next iter)"
-                if self.max_reported > 0 and total > self.max_reported
-                else ""
-            )
+        summary = f"{total} occurrence(s) of [{pattern_list}] still in proof bodies" + (
+            f" (showing first {self.max_reported}, "
+            f"{total - self.max_reported} more on next iter)"
+            if self.max_reported > 0 and total > self.max_reported
+            else ""
         )
         if self.max_reported > 0 and total > self.max_reported:
             reported = offenses[: self.max_reported]
@@ -132,6 +128,4 @@ class PatternAbsentChecker(Checker):
             return CheckResult(
                 passed=False, pseudo_diagnostics=reported, summary=summary
             )
-        return CheckResult(
-            passed=False, pseudo_diagnostics=offenses, summary=summary
-        )
+        return CheckResult(passed=False, pseudo_diagnostics=offenses, summary=summary)

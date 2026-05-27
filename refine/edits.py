@@ -167,9 +167,7 @@ def _apply_range_edits(content: str, edits: list[Edit]) -> str:
         start_off = position_to_offset(
             content, e.range.start.line, e.range.start.character
         )
-        end_off = position_to_offset(
-            content, e.range.end.line, e.range.end.character
-        )
+        end_off = position_to_offset(content, e.range.end.line, e.range.end.character)
         indexed.append((start_off, end_off, e.replacement))
     indexed.sort(key=lambda triple: triple[0], reverse=True)
 
@@ -180,8 +178,7 @@ def _apply_range_edits(content: str, edits: list[Edit]) -> str:
         _, next_end, _ = indexed[i + 1]
         if next_end > curr_start:
             raise OverlappingEditsError(
-                f"edits at offsets {indexed[i + 1][:2]} and "
-                f"{indexed[i][:2]} overlap"
+                f"edits at offsets {indexed[i + 1][:2]} and {indexed[i][:2]} overlap"
             )
 
     result = content

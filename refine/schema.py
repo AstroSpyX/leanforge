@@ -88,9 +88,7 @@ class Edit(BaseModel):
                     "Edit with kind='replace_text' requires a `find_text` field"
                 )
             if self.range is not None:
-                raise ValueError(
-                    "Edit with kind='replace_text' must not set `range`"
-                )
+                raise ValueError("Edit with kind='replace_text' must not set `range`")
             if not self.find_text:
                 raise ValueError(
                     "Edit with kind='replace_text' has empty `find_text`; "

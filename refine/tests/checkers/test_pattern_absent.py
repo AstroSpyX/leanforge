@@ -68,9 +68,7 @@ class TestPatternAbsentCheckerCap:
         """With 100 matches and max_reported=20, surface 20 specific +
         1 summary = 21 total. Agent gets a workable batch per iter."""
         content = _proof_body_with_n_matches(100)
-        checker = PatternAbsentChecker(
-            name="x", patterns=(r"Γ\.op",), max_reported=20
-        )
+        checker = PatternAbsentChecker(name="x", patterns=(r"Γ\.op",), max_reported=20)
         result = checker.check(content, [])
         assert result.passed is False
         assert len(result.pseudo_diagnostics) == 21
@@ -80,9 +78,7 @@ class TestPatternAbsentCheckerCap:
     def test_no_cap_emits_all_when_below_threshold(self) -> None:
         """5 matches with cap=20 → emit all 5, no summary line."""
         content = _proof_body_with_n_matches(5)
-        checker = PatternAbsentChecker(
-            name="x", patterns=(r"Γ\.op",), max_reported=20
-        )
+        checker = PatternAbsentChecker(name="x", patterns=(r"Γ\.op",), max_reported=20)
         result = checker.check(content, [])
         assert len(result.pseudo_diagnostics) == 5
         for d in result.pseudo_diagnostics:
@@ -91,18 +87,14 @@ class TestPatternAbsentCheckerCap:
     def test_cap_at_threshold_exactly_no_summary(self) -> None:
         """Exactly max_reported matches → emit all, no summary."""
         content = _proof_body_with_n_matches(20)
-        checker = PatternAbsentChecker(
-            name="x", patterns=(r"Γ\.op",), max_reported=20
-        )
+        checker = PatternAbsentChecker(name="x", patterns=(r"Γ\.op",), max_reported=20)
         result = checker.check(content, [])
         assert len(result.pseudo_diagnostics) == 20
 
     def test_max_reported_zero_disables_cap(self) -> None:
         """Setting cap=0 means surface every match (legacy behavior)."""
         content = _proof_body_with_n_matches(50)
-        checker = PatternAbsentChecker(
-            name="x", patterns=(r"Γ\.op",), max_reported=0
-        )
+        checker = PatternAbsentChecker(name="x", patterns=(r"Γ\.op",), max_reported=0)
         result = checker.check(content, [])
         assert len(result.pseudo_diagnostics) == 50
 
@@ -128,9 +120,7 @@ class TestPatternAbsentCheckerCap:
     def test_summary_omits_cap_note_when_below_threshold(self) -> None:
         """When the total fits under max_reported, no truncation note."""
         content = _proof_body_with_n_matches(5)
-        checker = PatternAbsentChecker(
-            name="x", patterns=(r"Γ\.op",), max_reported=20
-        )
+        checker = PatternAbsentChecker(name="x", patterns=(r"Γ\.op",), max_reported=20)
         result = checker.check(content, [])
         assert result.summary is not None
         assert "5" in result.summary

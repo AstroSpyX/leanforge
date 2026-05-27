@@ -1,11 +1,11 @@
 """Smoke test: one call per Anthropic model + verify local disk cache hit.
 
 Run:
-  uv run --with anthropic --with python-dotenv --python 3.12 \\
-      -m llm.smoke_anthropic
+  uv run --group runtime --python 3.12 -m llm.smoke_anthropic
 
 Requires ANTHROPIC_API_KEY in env. The .env in the project root is
-auto-loaded on import (see llm/__init__.py).
+loaded by this script's main() (per M-1/M-2: entry points own side
+effects; the llm package itself doesn't touch .env on import).
 """
 
 from __future__ import annotations
@@ -13,11 +13,14 @@ from __future__ import annotations
 import sys
 
 from llm import AskLLMError, ask
+from llm.env import load_env_if_available
 
 PROMPT = "Reply with the single word: OK"
 
 
 def main() -> int:
+    # Composition root (M-1 + M-2): load .env here, not at import.
+    load_env_if_available()
     failed = 0
     for model in ("haiku", "sonnet", "opus"):
         print(f"\n=== {model} ===", file=sys.stderr)

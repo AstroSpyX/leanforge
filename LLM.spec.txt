@@ -211,8 +211,7 @@ values still win). Workflow:
 
   cp .env.example .env
   # edit .env, set ANTHROPIC_API_KEY=sk-ant-...
-  uv run --with anthropic --with python-dotenv --python 3.12 \
-      -m llm.smoke_anthropic
+  uv run --group runtime --python 3.12 -m llm.smoke_anthropic
 
 .env is in .gitignore; .env.example is committed. Do not commit
 .env. Keys leaked in chat transcripts or any committed file must be

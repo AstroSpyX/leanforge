@@ -28,16 +28,23 @@ local-only reference). The most load-bearing rules:
 - K-2: no implicit `Any`; mypy `--strict` clean
 - N-1: no `data`/`info`/`obj`/`temp` in identifiers
 
-Run the QA pipeline before every commit:
+Run the QA pipeline before every commit. Dependency groups are
+defined in `pyproject.toml` under `[dependency-groups]`; use them
+instead of `--with X --with Y` chains:
 
 ```
-uv run --with ruff --python 3.12 -- ruff check refine/
-uv run --with ruff --python 3.12 -- ruff format --check refine/
-uv run --with mypy --with pydantic --python 3.12 -- \
-    mypy <modified files> --strict --ignore-missing-imports
-uv run --with pytest --with pytest-cov --with pydantic --python 3.12 -- \
-    python -m pytest refine/tests/ --cov=refine --cov-branch -q
+uv run --group lint --python 3.12 -- ruff check .
+uv run --group lint --python 3.12 -- ruff format --check .
+uv run --group typecheck --python 3.12 -- \
+    mypy llm refine --strict --ignore-missing-imports
+uv run --group test --python 3.12 -- \
+    python -m pytest --cov=llm --cov=refine --cov-branch -q
 ```
+
+Per K-3, mypy is invoked from the repository root with explicit
+source roots (`llm refine`). `[tool.mypy]` in `pyproject.toml`
+sets `explicit_package_bases = true` + `mypy_path = "."` so import
+resolution is deterministic regardless of which packages you list.
 
 ## Specs
 

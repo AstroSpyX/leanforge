@@ -945,8 +945,7 @@ Programmatic:
 
 CLI:
 
-  uv run --with anthropic --with python-dotenv --with leanclient \
-         --python 3.12 -m refine \
+  uv run --group runtime --python 3.12 -m refine \
          --project-root examples/scratch \
          --file Scratch/Basic.lean \
          --goal "Make the file compile" \

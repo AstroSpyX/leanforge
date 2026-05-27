@@ -23,6 +23,7 @@ import re
 import sys
 from pathlib import Path
 
+from llm.env import load_env_if_available
 from refine.checkers import CheckerStage
 from refine.checkers.llm_judge import LLMJudgeChecker
 from refine.checkers.pattern_absent import PatternAbsentChecker
@@ -146,6 +147,9 @@ def _parse_pattern_spec(spec: str) -> tuple[str, list[str]]:
 
 
 def main() -> int:
+    # Composition root (M-1 + M-2): the entry point owns side effects.
+    # Load .env here so the llm package can stay pure on import.
+    load_env_if_available()
     args = _parse_args()
     logging.basicConfig(
         level=logging.WARNING if args.quiet else logging.INFO,
