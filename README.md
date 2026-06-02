@@ -53,6 +53,13 @@ uv run --group runtime --python 3.12 leanforge.py path/to/File.lean
 See `RUN_COMMANDS.txt` for the full command set — inspecting per-run
 state, the LLM cache, and the QA pipeline.
 
+## Additional docs
+
+- [PROJECT_LOG.txt](PROJECT_LOG.txt) — running narrative history of the project.
+- [IMPROVEMENTS.txt](IMPROVEMENTS.txt) — backlog and ideas for future work.
+- [llm/LOCAL_MODELS.txt](llm/LOCAL_MODELS.txt) — archived local-model (Ollama) investigation.
+- [llm/SPIKES.md](llm/SPIKES.md) — pre-code findings (local-model eval, JSON-mode decision, etc.).
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
